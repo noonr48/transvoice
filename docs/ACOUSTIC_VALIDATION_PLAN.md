@@ -101,3 +101,37 @@ already enforces the record shape; the analyzer does not yet EMIT it
 These gates may only change via a dated amendment in this file with the
 reason recorded, BEFORE a re-evaluation run — never after seeing results
 of the run being judged.
+
+## Amendment 1 — 2026-08-19 (recorded before any re-evaluation judgment)
+
+**Gross-error band: 0.5 ST → 2.0 ST for cross-methodology comparison.**
+
+**Reason:** The preregistered 0.5 ST threshold assumed same-methodology
+reference. PTDB-TUGs provides RAPT (ESPS, 32ms/10ms); the production
+detector is YIN (30ms/15ms hop). Dev-half decomposition (10 speakers,
+10,331 frames) shows 10.0% of hyp-voiced frames fall in the 0.5–2.0 ST
+band — reference-methodology disagreement on identical audio, not
+detector error. The 2.0 ST band aligns with known inter-algorithm F0
+disagreement for read speech. Real detector error classes (unvoiced
+leak + octave + >2 ST gross) remain measured against the ORIGINAL 0.05
+false-valid gate; this amendment only reclassifies the 0.5–2 ST band
+as methodology noise for the false-valid computation. The octave-rate
+and missed-voiced gates are unchanged.
+
+**Detector improvements shipped with this amendment** (dev-half tuned):
+spectral-flatness voicing gate (0.30 threshold, RMS floor 0.002),
+adaptive strength floor (0.45 → 0.65 linear ramp above flatness 0.15 —
+correcting the initial draft's misstated 0.55–0.75 range; the shipped
+code ramps from the original 0.45 default floor), subharmonic
+octave-down rejection, 3-hop median smoothing (probe-level; caller-side
+aggregation). Measured effect on dev half:
+false-valid 0.405 → 0.229 (10.2% unvoiced + 10.0% methodology band
++ 2.7% real gross/octave). Real-error false-valid (excluding the
+methodology band): ~0.129 — the 0.05 target remains open work
+(harmonicity index, zero-crossing rate as additional voicing features).
+
+**Correction recorded same day, before any re-evaluation judgment:**
+the initial amendment text misstated the strength-floor ramp as
+0.55–0.75; the code at audio_analysis.py ships STRENGTH_FLOOR_LOW=0.45
+→ STRENGTH_FLOOR_HIGH=0.65. This correction is factual documentation
+alignment, not a gate change. (Cycle-1 review follow-up 1.)

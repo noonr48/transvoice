@@ -8,7 +8,7 @@ const projectRoot = path.resolve(import.meta.dirname, '../..');
 const outputRoot = path.join(projectRoot, 'design/frontend/verify');
 const screenshotPath = path.join(outputRoot, 'screenshots/max-content-w360-h620.png');
 const reportPath = path.join(outputRoot, 'max-content-w360-h620.json');
-const runtimeRoot = process.env.PLAYWRIGHT_ROOT || '/home/USER/Desktop/solane/vocechat-bridge';
+const runtimeRoot = process.env.PLAYWRIGHT_ROOT || '/home/USER
 const require = createRequire(path.join(runtimeRoot, 'package.json'));
 const { chromium } = require('playwright');
 

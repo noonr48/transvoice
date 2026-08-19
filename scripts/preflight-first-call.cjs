@@ -6,12 +6,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
-const EXPECTED_ROOT = '/home/USER/Desktop/solane/transvoice-app';
+const EXPECTED_ROOT = '/home/USER
 const EXPECTED_BRANCH = 'voice-memory-v5';
 const PLANNING_BASELINE = '54b3f7662e1c71f1b86ab7ceacf6aff8759a968d';
 const PROCESS_OWNER = 'agent-process';
-const EVIDENCE_ROOT = '/home/USER/.local/share/opencode/commit-transactions/transvoice-first-call-preflight';
-const UNIT_PATH = '/home/USER/.config/systemd/user/voice-tutor-standalone.service';
+const EVIDENCE_ROOT = '/home/USER
+const UNIT_PATH = '/home/USER
 const REVIEWED_UNIT_SHA256 = '3986d991cf0fa9a4fe65346f0ee3948a0af9e95e126c9f80a0182f3d0955b018';
 const ANCHOR_V2_SHA256 = '6ea04a5f1197970de39ea44b4a79a49597dc42bd519606e4467acb5666d16453';
 const REVIEW_V2_SHA256 = 'c06fbdd9ddb51beddb271ac36aca0ed6ca65a882a25896cda120afdc08d059bc';
@@ -72,9 +72,9 @@ const COMMIT_GROUPS = Object.freeze([
 const PRECOMMIT_COMMIT_GROUPS = Object.freeze(COMMIT_GROUPS.slice(0, 4));
 
 const CUSTODY_SEEDS = ['server.js', 'backend/voice-standalone-runtime.js', 'backend/coach-page.html'];
-const R12_SOURCE_PATH = '/home/USER/.local/share/opencode/commit-transactions/transvoice-TV-P2-R12-sanitized-sse/integration/evidence/source/backend/coach-app.js';
-const R12_RUNNER_PATH = '/home/USER/.local/share/opencode/commit-transactions/transvoice-TV-P2-R12-sanitized-sse/integration/evidence/run-mutations.py';
-const EXTERNAL_STYLE_MODULE = '/home/USER/Desktop/solane/sloane-ui/backend/voice-tutor-v2/style-compliance-v2.js';
+const R12_SOURCE_PATH = '/home/USER
+const R12_RUNNER_PATH = '/home/USER
+const EXTERNAL_STYLE_MODULE = '/home/USER
 const EXTERNAL_STYLE_CALLER = 'backend/coaching/sanitizer.js';
 const EXTERNAL_STYLE_TEST_CONTRACTS = [
   {
@@ -95,9 +95,9 @@ const EXTERNAL_STYLE_TEST_CONTRACTS = [
     ],
   },
   {
-    command: 'node --test --test-reporter=tap /home/USER/Desktop/solane/sloane-ui/backend/voice-tutor-v2/direction-gate.test.js',
-    cwd: '/home/USER/Desktop/solane/sloane-ui',
-    sourcePath: '/home/USER/Desktop/solane/sloane-ui/backend/voice-tutor-v2/direction-gate.test.js',
+    command: 'node --test --test-reporter=tap /home/USER
+    cwd: '/home/USER
+    sourcePath: '/home/USER
     tests: [
       'directionCueViolation: feminizing cues are rejected in MASCULINIZING records',
       'directionCueViolation: correct same-direction cues PASS',
@@ -186,7 +186,7 @@ const REVIEWED_RUNBOOK_SHA256 = 'e0bb208e58f5b64b23fa1c8f0301b3de0916bbde98ff35b
 const REVIEWED_RUNBOOK_BYTES = 7873;
 const RUNBOOK_REVIEW_PROVENANCE = 'terminal runbook-review PASS session ses_0a100b9e9ffemw8Ud7EPEczK8R; TV-PREFLIGHT-I4-RUNBOOK-REPAIR1 receipt';
 const REVIEWED_RUNBOOK_INLINE_CODE = new Set([
-  '/home/USER/Desktop/solane/transvoice-app', 'baseline', 'lease', 'CLEAN_BASELINE', 'OWNED_VERIFIED',
+  '/home/USER 'baseline', 'lease', 'CLEAN_BASELINE', 'OWNED_VERIFIED',
   'mutation', 'hermetic', 'OFFLINE_READY', '0', 'BLOCKED', '1', 'FAIL', '2', 'PASS', 'WARN_DO_NOT_USE',
   'DEFERRED', 'FIRST_LIVE_ONLY', 'BLOCKING_UNKNOWN', 'offlineReady', 'false', UNIT_PATH, REVIEWED_UNIT_SHA256,
   'Environment=', 'After=', 'Wants=', 'offlineReady=false', 'VOXCPM_ENABLED=true',

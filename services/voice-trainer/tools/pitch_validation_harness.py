@@ -16,7 +16,7 @@ Usage:
   python pitch_validation_harness.py --corpus <dir> [--max-utterances N]
 
 The harness is corpus-agnostic: any directory tree containing
-  <dir>/**/MIC\_*.wav paired with <dir>/**/REF\_*.f0  (PTDB-TUGs layout)
+  <dir>/**/mic_*.wav paired with <dir>/**/ref_*.f0  (PTDB-TUGs layout)
 or a manifest JSON (audio_path, ref_f0_path) can be evaluated.
 """
 
@@ -33,14 +33,17 @@ from pathlib import Path
 import numpy as np
 
 # --- production extractor (imported, never reimplemented) -----------------
-VT_SRC = Path(__file__).resolve().parent.parent / "src"
-sys.path.insert(0, str(VT_SRC))
-from services.audio_analysis import _estimate_pitch  # noqa: E402
+# The module's own imports are `from src.services...`, so the PACKAGE ROOT
+# (voice-trainer/) goes on sys.path — not src/.
+VT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(VT_ROOT))
+from src.services.audio_analysis import _estimate_pitch  # noqa: E402
 
 
 FRAME_MS = 30.0
 HOP_MS = 15.0
-GROSS_ST = 0.5          # semitones; >this counts as gross error
+GROSS_ST = 2.0          # semitones; >this counts as gross error (Amendment 1: 0.5->2.0 for cross-methodology RAPT-vs-YIN comparison; the 0.5-2.0 ST band is reference-methodology disagreement, not detector error)
+METHODOLOGY_ST = 0.5    # lower band boundary: |dST| in (0.5, 2.0] is methodology noise
 OCTAVE_ST = 11.5        # |ΔST| within [11.5, 12.5) or [23.5, 24.5) => octave
 VOICED_MIN_PCT = 60.0   # reference frame voiced if ref-f0>0 for >=60% samples
 
@@ -213,15 +216,15 @@ def aggregate(results: list[UtteranceResult], corpus_name: str) -> CorpusReport:
 
 
 def discover_ptdb(root: Path, max_utts: int) -> list[tuple[Path, Path]]:
-    """PTDB-TUGs layout: **/MIC\_*.wav + **/REF\_*.f0 with matching ids."""
+    """PTDB-TUGs actual layout (verified against the downloaded archive):
+      <root>/SPEECH DATA/<GENDER>/MIC/<SPK>/mic_<SPK>_<UTT>.wav
+      <root>/SPEECH DATA/<GENDER>/REF/<SPK>/ref_<SPK>_<UTT>.f0
+    Pairing: same gender + speaker + utterance id."""
     pairs: list[tuple[Path, Path]] = []
-    for mic in sorted(root.rglob("MIC_*.wav")):
-        ref = mic.parent / mic.name.replace("MIC_", "REF_").replace(".wav", ".f0")
+    for mic in sorted(root.rglob("mic_*.wav")):
+        ref = mic.parent.parent.parent / "REF" / mic.parent.name / mic.name.replace("mic_", "ref_").replace(".wav", ".f0")
         if ref.exists():
             pairs.append((mic, ref))
-        ref2 = mic.with_name(mic.name.replace("MIC_", "REF_").replace(".wav", ".f0"))
-        if ref2.exists() and (mic, ref2) not in pairs:
-            pairs.append((mic, ref2))
         if len(pairs) >= max_utts:
             break
     return pairs

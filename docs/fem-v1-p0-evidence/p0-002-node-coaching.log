@@ -717,7 +717,7 @@ test at transvoice-app/backend/coaching/detector-authority-integration.test.js:9
   + 'formant_detector_not_validated_for_shadow_decision'
   - 'formant_extractor_not_validated_for_beginner_authority'
   
-      at TestContext.<anonymous> (/home/USER/work/tv-handover-clone2/transvoice-app/backend/coaching/detector-authority-integration.test.js:117:10)
+      at TestContext.<anonymous> (/home/USER
       at Test.runInAsyncScope (node:async_hooks:213:14)
       at Test.run (node:internal/test_runner/test:1095:25)
       at Test.processPendingSubtests (node:internal/test_runner/test:777:18)
@@ -738,7 +738,7 @@ test at transvoice-app/backend/coaching/reachable-target-activation.test.js:140:
   
   false !== true
   
-      at TestContext.<anonymous> (/home/USER/work/tv-handover-clone2/transvoice-app/backend/coaching/reachable-target-activation.test.js:143:10)
+      at TestContext.<anonymous> (/home/USER
       at Test.runInAsyncScope (node:async_hooks:213:14)
       at Test.run (node:internal/test_runner/test:1095:25)
       at Test.processPendingSubtests (node:internal/test_runner/test:777:18)
@@ -756,7 +756,7 @@ test at transvoice-app/backend/coaching/reachable-target-activation.test.js:140:
 test at transvoice-app/backend/coaching/reachable-target-activation.test.js:181:1
 ✖ successful active application records the reachable policy provenance (0.294816ms)
   TypeError: Cannot read properties of undefined (reading 'activation')
-      at TestContext.<anonymous> (/home/USER/work/tv-handover-clone2/transvoice-app/backend/coaching/reachable-target-activation.test.js:184:38)
+      at TestContext.<anonymous> (/home/USER
       at Test.runInAsyncScope (node:async_hooks:213:14)
       at Test.run (node:internal/test_runner/test:1095:25)
       at Test.processPendingSubtests (node:internal/test_runner/test:777:18)
@@ -770,7 +770,7 @@ test at transvoice-app/backend/coaching/target-metric-runtime.test.js:78:1
   
   0 !== 1
   
-      at TestContext.<anonymous> (/home/USER/work/tv-handover-clone2/transvoice-app/backend/coaching/target-metric-runtime.test.js:94:10)
+      at TestContext.<anonymous> (/home/USER
       at Test.runInAsyncScope (node:async_hooks:213:14)
       at Test.run (node:internal/test_runner/test:1095:25)
       at Test.processPendingSubtests (node:internal/test_runner/test:777:18)

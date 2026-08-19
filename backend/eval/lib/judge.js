@@ -11,7 +11,7 @@
  * under test, so it does not self-grade.
  *
  * Endpoint (env):
- *   EVAL_JUDGE_BASE_URL   e.g. http://YOUR_EVAL_JUDGE_HOST:PORT/v1  (REQUIRED to enable;
+ *   EVAL_JUDGE_BASE_URL   e.g. http://INTERNAL_HOST:PORT/v1  (REQUIRED to enable;
  *                         unset -> judge disabled, L1+L3 still run)
  *   EVAL_JUDGE_MODEL      model id/alias (default 'judge')
  *   EVAL_JUDGE_TIMEOUT_MS default 60000

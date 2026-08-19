@@ -3,7 +3,7 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-const runtimeRoot = process.env.PLAYWRIGHT_ROOT || '/home/USER/Desktop/solane/vocechat-bridge';
+const runtimeRoot = process.env.PLAYWRIGHT_ROOT || '/home/USER
 const require = createRequire(path.join(runtimeRoot, 'package.json'));
 const { chromium } = require('playwright');
 const target = process.env.TRANSVOICE_URL || 'http://127.0.0.1:3021/app';

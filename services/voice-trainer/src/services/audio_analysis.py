@@ -99,6 +99,30 @@ PITCH_CEILING_MIN_FRACTION = 0.05
 YIN_THRESHOLD = 0.20
 PITCH_SEARCH_MIN_HZ = 70.0
 PITCH_SEARCH_MAX_HZ = 450.0
+
+# Independent voicing gate (validation fix, 2026-08-19). PTDB-TUGs evaluation
+# (docs/PITCH_VALIDATION_FIRST_RESULTS.md) measured a 40.5% false-valid rate:
+# YIN's periodicity strength dips below its 0.45 floor on noise-like unvoiced
+# speech (fricatives, aspiration, silence tails), and the detector had no
+# separate voiced/unvoiced decision. Spectral flatness separates them: voiced
+# speech concentrates energy in harmonics (low geometric/arithmetic spectral
+# ratio); unvoiced noise flattens the spectrum. A frame must pass BOTH gates.
+# Tuned on the PTDB-TUGs dev half (F01-F05 + M01-M05) only; the held-out
+# half stays untouched until the dev gates pass.
+SPECTRAL_FLATNESS_VOICED_MAX = 0.30
+SPECTRAL_FLATNESS_MIN_RMS = 0.002
+
+# Adaptive strength floor: frames with elevated flatness (approaching the
+# voiced/unvoiced boundary) need STRONGER YIN periodicity to count as voiced.
+# Well-formed harmonics (flatness < 0.15) keep the original 0.45 floor.
+SPECTRAL_FLATNESS_STRENGTH_RAMP = 0.15
+STRENGTH_FLOOR_LOW = 0.45
+STRENGTH_FLOOR_HIGH = 0.65
+
+# Subharmonic (octave-down) rejection: if the half-period lag ALSO shows
+# strong periodicity, the true period may be tau/2 and reporting sample_rate/tau
+# is an octave-down error. Require the half-lag cmnd to be clearly worse.
+SUBHARMONIC_CMND_RATIO_MAX = 0.80
 PITCH_BOUNDARY_TOLERANCE_HZ = 0.5
 
 
@@ -686,6 +710,29 @@ def _estimate_pitch(
     if signal_energy <= EPSILON:
         return None, 0.0
 
+    # Independent voicing gate (validation fix): spectral flatness + floor.
+    # Unvoiced speech has a noise-like flat spectrum (geometric/arithmetic
+    # mean ratio near 1); voiced speech concentrates energy in harmonics
+    # (ratio well below 1). This kills the false-valid class YIN's 0.45
+    # strength floor misses. Silent-ish frames die on the RMS floor first.
+    frame_rms = math.sqrt(signal_energy / n)
+    if frame_rms < SPECTRAL_FLATNESS_MIN_RMS:
+        return None, 0.0
+    spectrum = np.abs(np.fft.rfft(signal * np.hanning(n))) + EPSILON
+    spectral_flatness = float(np.exp(np.mean(np.log(spectrum))) / np.mean(spectrum))
+    if spectral_flatness > SPECTRAL_FLATNESS_VOICED_MAX:
+        return None, 0.0
+
+    # Adaptive strength floor: frames near the flatness boundary need stronger
+    # YIN periodicity to count as voiced (kills boundary false-accepts).
+    if spectral_flatness > SPECTRAL_FLATNESS_STRENGTH_RAMP:
+        ramp = (spectral_flatness - SPECTRAL_FLATNESS_STRENGTH_RAMP) / max(
+            SPECTRAL_FLATNESS_VOICED_MAX - SPECTRAL_FLATNESS_STRENGTH_RAMP, EPSILON
+        )
+        strength_floor = STRENGTH_FLOOR_LOW + ramp * (STRENGTH_FLOOR_HIGH - STRENGTH_FLOOR_LOW)
+    else:
+        strength_floor = STRENGTH_FLOOR_LOW
+
     min_lag = max(2, int(sample_rate / PITCH_SEARCH_MAX_HZ))
     max_lag = min(n - 2, int(math.ceil(sample_rate / PITCH_SEARCH_MIN_HZ)))
     if max_lag <= min_lag:
@@ -725,8 +772,24 @@ def _estimate_pitch(
         tau = min_lag + int(np.argmin(cmnd[min_lag : max_lag + 1]))
 
     strength = float(np.clip(1.0 - cmnd[tau], 0.0, 1.0))
-    if strength < 0.45:
+    if strength < strength_floor:
         return None, strength
+
+    # Subharmonic (octave-down) rejection: when the half-period lag also
+    # shows strong periodicity, the true period may be tau/2 — reporting
+    # sample_rate/tau would then be a confident octave-down error. Only
+    # accept tau when the half-lag is CLEARLY worse than tau.
+    if tau >= 2 * min_lag and (tau // 2) >= min_lag:
+        half_tau = tau // 2
+        if cmnd[half_tau] < SUBHARMONIC_CMND_RATIO_MAX * cmnd[tau]:
+            # half-lag nearly as periodic: the true period is likely half_tau
+            # — re-run selection from the half to avoid the octave-down error
+            tau = half_tau
+            while tau > min_lag and cmnd[tau - 1] < cmnd[tau]:
+                tau -= 1
+            strength = float(np.clip(1.0 - cmnd[tau], 0.0, 1.0))
+            if strength < strength_floor:
+                return None, strength
 
     offset = 0.0
     if min_lag < tau < max_lag:

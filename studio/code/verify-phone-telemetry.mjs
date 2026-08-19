@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 const cdpUrl = process.env.TRANSVOICE_CDP_URL || 'http://127.0.0.1:9223';
 const gatewayUrl = process.env.TRANSVOICE_GATEWAY_URL || 'http://127.0.0.1:3021';
 const witnessLog = process.env.TRANSVOICE_WITNESS_LOG
-  || '/home/USER/.local/share/sloane/transvoice/witness.jsonl';
+  || '/home/USER
 const readOnly = process.argv.includes('--read-only');
 
 const targets = await fetch(`${cdpUrl}/json`).then((response) => response.json());
