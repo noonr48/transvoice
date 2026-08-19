@@ -3,17 +3,33 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { getCue } = require('./cue-library-v3');
-const { qualifyPitchAlphaCue } = require('./cue-alpha-qualification');
+const {
+  CUE_ALPHA_POLICY_VERSION,
+  cueContentDigest,
+  qualifyPitchAlphaCue,
+} = require('./cue-alpha-qualification');
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
 test('primary pitch cue qualifies without inventing clinical approval', () => {
-  const result = qualifyPitchAlphaCue(getCue('pitch.register.small-glide-up.v1'));
+  const cue = getCue('pitch.register.small-glide-up.v1');
+  const result = qualifyPitchAlphaCue(cue);
   assert.equal(result.qualified, true);
   assert.equal(result.status, 'alpha_qualified_nonclinical');
+  assert.equal(result.policyVersion, CUE_ALPHA_POLICY_VERSION);
+  assert.equal(result.contentDigest, cueContentDigest(cue));
+  assert.match(result.contentDigest, /^[0-9a-f]{64}$/);
   assert.equal(result.claimsClinicalApproval, false);
   assert.equal(result.requiresSpecialistCredential, false);
   assert.equal(result.requiresDemonstrationRecording, false);
+});
+
+test('qualification is content-addressed so material cue edits change the digest', () => {
+  const cue = clone(getCue('pitch.register.small-glide-up.v1'));
+  const before = qualifyPitchAlphaCue(cue);
+  cue.instruction = `${cue.instruction} Keep it relaxed.`;
+  const after = qualifyPitchAlphaCue(cue);
+  assert.notEqual(before.contentDigest, after.contentDigest);
 });
 
 test('non-pitch cues cannot enter the pitch alpha by status spoofing', () => {
@@ -44,6 +60,20 @@ test('forcing or anatomical manipulation language cannot qualify', () => {
   const result = qualifyPitchAlphaCue(cue);
   assert.equal(result.qualified, false);
   assert.ok(result.reasons.some((reason) => reason.startsWith('forbidden_wording:')));
+});
+
+test('forcing variants and press-harder wording cannot qualify', () => {
+  for (const instruction of [
+    'Keep forcing the note upward with an easy hum.',
+    'Use a small glide and press harder.',
+    'Tighten slightly and make a small comfortable glide.',
+  ]) {
+    const cue = clone(getCue('pitch.register.small-glide-up.v1'));
+    cue.instruction = instruction;
+    const result = qualifyPitchAlphaCue(cue);
+    assert.equal(result.qualified, false, instruction);
+    assert.ok(result.reasons.some((reason) => reason.startsWith('forbidden_wording:')), instruction);
+  }
 });
 
 test('an unbounded step cannot qualify', () => {
