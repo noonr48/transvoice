@@ -12,6 +12,11 @@ const { recordFinalizedAttempt } = require('./session-attempt-sequence');
  * state replacement an active caller would need, but it never mutates the
  * caller's learner/session objects. Shadow therefore means no learning-state
  * mutation in the strong sense, including attempt sequencing.
+ *
+ * `turnEvidence` is the adapter surface for a coach turn that has acoustic or
+ * self-report evidence but no finalized-attempt identity. It may influence the
+ * controller, but it can NEVER be entered into exact-next sequencing. Only a
+ * `finalizedAttempt` with an artifact identity is settlement authority.
  */
 const FEM_V1_RUNTIME_SCHEMA = 'transvoice.fem_v1_runtime_turn.v1';
 const MODES = Object.freeze(['active', 'shadow']);
@@ -31,6 +36,10 @@ function cloneAttemptSequence(sequence) {
     nextOrdinal: sequence.nextOrdinal,
     attempts: sequence.attempts.map((attempt) => ({ ...attempt })),
   };
+}
+
+function normalizeEvidenceObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
 /**
@@ -133,6 +142,7 @@ function resolveFemV1RuntimeTurn({
   learnerState = {},
   sessionState = {},
   finalizedAttempt = null,
+  turnEvidence = null,
   cueResolver = () => null,
   now = null,
 } = {}) {
@@ -149,34 +159,53 @@ function resolveFemV1RuntimeTurn({
   const disposition = consumption.disposition;
   const workingAttemptSequence = consumption.attemptSequence;
 
-  const selfReport = finalizedAttempt?.selfReport
-    ? normalizeSelfReport(finalizedAttempt.selfReport)
-    : normalizeSelfReport({});
+  const evidence = normalizeEvidenceObject(turnEvidence);
+  const evidenceSelfReport = normalizeEvidenceObject(
+    Object.keys(normalizeEvidenceObject(evidence.selfReport)).length > 0
+      ? evidence.selfReport
+      : finalizedAttempt?.selfReport,
+  );
+  const selfReport = normalizeSelfReport(evidenceSelfReport);
 
   let settlement = { status: 'not_applicable', result: 'no_pending_trial', trialId: null };
-  if (finalizedAttempt && !selfReport.pain && !selfReport.throatPain) {
-    settlement = resolvePendingTrial(
-      sessionState,
-      finalizedAttempt,
-      disposition?.ordinal ?? null,
-      workingAttemptSequence,
-      nowMs,
-    );
-  } else if (sessionState?.pendingTrial && sessionState.pendingTrial.status === 'pending') {
+  const pendingTrial = sessionState?.pendingTrial;
+  if (finalizedAttempt) {
+    if (selfReport.pain || selfReport.throatPain) {
+      if (pendingTrial && pendingTrial.status === 'pending') {
+        settlement = {
+          status: 'not_applicable',
+          result: 'pain_skipped_settlement',
+          trialId: String(pendingTrial.trialId || '').slice(0, 120) || null,
+        };
+      }
+    } else {
+      settlement = resolvePendingTrial(
+        sessionState,
+        { ...finalizedAttempt, selfReport: evidenceSelfReport },
+        disposition?.ordinal ?? null,
+        workingAttemptSequence,
+        nowMs,
+      );
+    }
+  } else if (pendingTrial && pendingTrial.status === 'pending') {
+    // A coach turn without a finalized attempt cannot consume, skip or settle a
+    // pending trial. This state used to be mislabeled as a pain-skipped take.
     settlement = {
       status: 'not_applicable',
-      result: 'pain_skipped_settlement',
-      trialId: String(sessionState.pendingTrial.trialId || '').slice(0, 120) || null,
+      result: 'awaiting_next_attempt',
+      trialId: String(pendingTrial.trialId || '').slice(0, 120) || null,
     };
   }
 
-  const captureState = finalizedAttempt?.captureEvidence
-    && typeof finalizedAttempt.captureEvidence === 'object'
+  const captureSource = normalizeEvidenceObject(
+    Object.keys(normalizeEvidenceObject(evidence.captureEvidence)).length > 0
+      ? evidence.captureEvidence
+      : finalizedAttempt?.captureEvidence,
+  );
+  const captureState = Object.keys(captureSource).length > 0
     ? {
-      usable: finalizedAttempt.captureEvidence.usable === true,
-      reasons: Array.isArray(finalizedAttempt.captureEvidence.reasons)
-        ? finalizedAttempt.captureEvidence.reasons.slice(0, 8)
-        : [],
+      usable: captureSource.usable === true,
+      reasons: Array.isArray(captureSource.reasons) ? captureSource.reasons.slice(0, 8) : [],
     }
     : { usable: true, reasons: [] };
 
@@ -189,11 +218,15 @@ function resolveFemV1RuntimeTurn({
     discomfort: selfReport.discomfort,
   };
   for (const field of IMMEDIATE_STOP_FIELDS) {
-    safetyState[field] = finalizedAttempt?.selfReport?.[field] === true;
+    safetyState[field] = evidenceSelfReport[field] === true;
   }
   for (const field of REDUCE_DIFFICULTY_FLAG_FIELDS) {
-    safetyState[field] = finalizedAttempt?.selfReport?.[field] === true;
+    safetyState[field] = evidenceSelfReport[field] === true;
   }
+
+  const observationSource = Array.isArray(evidence.observations)
+    ? evidence.observations
+    : (Array.isArray(finalizedAttempt?.observations) ? finalizedAttempt.observations : []);
 
   const controllerTurn = resolveFeminizationV1Turn({
     safetyState,
@@ -202,7 +235,7 @@ function resolveFemV1RuntimeTurn({
     masteryState: learnerState?.mastery || null,
     goalProfile: learnerState?.goalProfile || null,
     capabilityProfile: learnerState?.capabilityProfile || null,
-    observations: Array.isArray(finalizedAttempt?.observations) ? finalizedAttempt.observations : [],
+    observations: observationSource,
     motorResponseMap: learnerState?.motorResponseMap || null,
     goalCueOverlay: learnerState?.goalCueOverlay || null,
     pendingTrial: sessionState?.pendingTrial || null,

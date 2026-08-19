@@ -13,14 +13,13 @@ const {
 } = require('./feminization-v1-policy');
 const { normalizeBeginnerMasteryState } = require('./beginner-mastery');
 const { applyProductPolicyToBridge } = require('./product-policy-bridge');
+const { resolveFemV1RuntimeTurn } = require('./fem-v1-runtime-turn');
 
 const TARGET_METRIC_RUNTIME_SCHEMA = 'transvoice.target_metric_runtime.v2';
 
 function resolveTargetMetricStage(repContext, signal) {
   const kind = String(repContext?.kind || signal?.takeKind || '').trim().toLowerCase();
-  if (['sustained', 'vowel', 'hum', 'sovt', 'sound'].some((token) => kind.includes(token))) {
-    return 'sound';
-  }
+  if (['sustained', 'vowel', 'hum', 'sovt', 'sound'].some((token) => kind.includes(token))) return 'sound';
   if (kind.includes('word')) return 'word';
   if (kind.includes('reading')) return 'reading';
   if (kind.includes('spontaneous') || kind.includes('conversation')) return 'spontaneous';
@@ -29,12 +28,8 @@ function resolveTargetMetricStage(repContext, signal) {
 
 function resolveRuntimeContextComparability(repContext, explicit = {}) {
   const probe = resolveProbeContextComparability(repContext);
-  const supplied = explicit && typeof explicit === 'object' && !Array.isArray(explicit)
-    ? explicit
-    : {};
+  const supplied = explicit && typeof explicit === 'object' && !Array.isArray(explicit) ? explicit : {};
   return {
-    // Explicit comparability remains available for future validated alignment
-    // callers. Controlled-probe inference never upgrades arbitrary speech.
     formants: supplied.formants === true || probe.formants === true,
     phraseProsody: supplied.phraseProsody === true || probe.phraseProsody === true,
     verified: supplied.verified === true || probe.verified === true,
@@ -45,34 +40,78 @@ function resolveRuntimeContextComparability(repContext, explicit = {}) {
   };
 }
 
-function resolveRuntimeCurriculumPhase({
-  curriculumPhase = null,
-  masteryState = null,
-  voiceState = {},
-} = {}) {
-  if (typeof curriculumPhase === 'string' && curriculumPhase.trim()) {
-    return normalizeCurriculumPhase(curriculumPhase);
-  }
-  const persisted = masteryState
-    || voiceState?.targetMetric?.mastery
-    || voiceState?.beginnerMastery
-    || null;
+function resolveRuntimeCurriculumPhase({ curriculumPhase = null, masteryState = null, voiceState = {} } = {}) {
+  if (typeof curriculumPhase === 'string' && curriculumPhase.trim()) return normalizeCurriculumPhase(curriculumPhase);
+  const persisted = masteryState || voiceState?.targetMetric?.mastery || voiceState?.beginnerMastery || null;
   if (persisted && typeof persisted === 'object' && !Array.isArray(persisted)) {
     return normalizeBeginnerMasteryState(persisted).curriculumPhase;
   }
   return DEFAULT_CURRICULUM_PHASE;
 }
 
+function captureEvidenceFromSignal(signal) {
+  const reliability = typeof signal?.capture?.reliability === 'string'
+    ? signal.capture.reliability
+    : null;
+  return {
+    usable: signal?.takeQuality?.usable === true,
+    reasons: reliability && reliability !== 'good' ? [`capture_${reliability}`] : [],
+  };
+}
+
+function finalizedAttemptFromVoiceState(voiceState, captureEvidence, observations) {
+  const artifact = voiceState?.lastAttemptArtifact;
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) return null;
+  const rawId = artifact.attemptArtifactId || artifact.artifactId || artifact.id || null;
+  const attemptArtifactId = typeof rawId === 'string' && rawId.trim() ? rawId.trim().slice(0, 160) : null;
+  if (!attemptArtifactId) return null;
+  const eligible = captureEvidence.usable === true;
+  return {
+    attemptArtifactId,
+    eligible,
+    ineligibleReason: eligible ? null : (captureEvidence.reasons[0] || 'capture_unusable'),
+    observations,
+    selfReport: artifact.selfReport || voiceState?.selfReport || {},
+    captureEvidence,
+  };
+}
+
+/**
+ * Common FEM shadow adapter piggy-backed on the target-metric runtime seam.
+ * Both the buffered coaching path and the SSE path already call this function,
+ * so the two paths now execute the same FEM orchestration semantics without
+ * introducing a second live mutation surface. FEM remains hard-shadow here.
+ */
+function resolveFemV1ShadowRuntime({ voiceState, signal, bridge, stage, motorMap, masteryState }) {
+  const observations = Array.isArray(bridge?.observations) ? bridge.observations : [];
+  const captureEvidence = captureEvidenceFromSignal(signal);
+  const selfReport = voiceState?.lastAttemptArtifact?.selfReport || voiceState?.selfReport || {};
+  const finalizedAttempt = finalizedAttemptFromVoiceState(voiceState, captureEvidence, observations);
+  return resolveFemV1RuntimeTurn({
+    mode: 'shadow',
+    learnerState: {
+      mastery: masteryState || voiceState?.beginnerMastery || null,
+      motorResponseMap: motorMap || voiceState?.motorResponseMap || null,
+      goalCueOverlay: voiceState?.goalCueOverlay || null,
+      goalProfile: voiceState?.goalProfile || null,
+      capabilityProfile: voiceState?.capabilityProfile || null,
+    },
+    sessionState: {
+      sessionId: voiceState?.sessionId || null,
+      stage,
+      pendingTrial: voiceState?.pendingTrial || null,
+      attemptSequence: voiceState?.attemptSequence || null,
+    },
+    finalizedAttempt,
+    turnEvidence: { selfReport, captureEvidence, observations },
+  });
+}
+
 /**
  * Shared target-metric runtime boundary for buffered and SSE coaching.
- *
- * In shadow mode this function is observational only: it never mutates the
- * CoachingSignal. In active mode it delegates to the bridge's positive
- * activation gates; the helper itself does not weaken or duplicate them.
- *
- * The full observation vector remains available to research/evaluation. The
- * product policy separately decides which measurements have enough authority
- * to choose the beginner's next coaching action.
+ * Target-metric active mode retains its historical bridge behavior, but the
+ * embedded FEM v1 orchestration is intentionally shadow-only until the FEM
+ * active release gates are satisfied.
  */
 function evaluateTargetMetricRuntime({
   voiceState = {},
@@ -100,20 +139,14 @@ function evaluateTargetMetricRuntime({
       curriculumPhase: null,
       bridge: null,
       witness: null,
+      femV1RuntimeTurn: null,
       applied: false,
     };
   }
 
   const stage = resolveTargetMetricStage(repContext, signal);
-  const resolvedContextComparability = resolveRuntimeContextComparability(
-    repContext,
-    contextComparability,
-  );
-  const resolvedCurriculumPhase = resolveRuntimeCurriculumPhase({
-    curriculumPhase,
-    masteryState,
-    voiceState,
-  });
+  const resolvedContextComparability = resolveRuntimeContextComparability(repContext, contextComparability);
+  const resolvedCurriculumPhase = resolveRuntimeCurriculumPhase({ curriculumPhase, masteryState, voiceState });
   const researchBridge = safeBuildTargetMetricBridge({
     voiceState,
     motorMap,
@@ -135,6 +168,15 @@ function evaluateTargetMetricRuntime({
     stage,
   });
 
+  const femV1RuntimeTurn = resolveFemV1ShadowRuntime({
+    voiceState,
+    signal,
+    bridge,
+    stage,
+    motorMap,
+    masteryState,
+  });
+
   const baseWitness = buildTargetMetricShadowWitness(bridge, signal);
   const witness = baseWitness ? {
     ...baseWitness,
@@ -143,12 +185,14 @@ function evaluateTargetMetricRuntime({
     product_decision_observation_count: bridge?.productPolicy?.decisionObservationCount ?? null,
     product_excluded_observation_count: bridge?.productPolicy?.excludedObservationCount ?? null,
     product_exclusion_reasons: bridge?.productPolicy?.exclusionReasons || {},
+    // Privacy-bounded nested witness only; never raw observations/cue prose.
+    fem_v1: femV1RuntimeTurn?.witness || null,
   } : null;
+
   let applied = false;
   if (resolvedMode === 'active' && signal && typeof signal === 'object') {
     applyTargetMetricDecision(signal, bridge, { sectionLoopActive });
-    applied = signal.targetMetricV3?.mode === 'active'
-      && signal.targetMetricV3?.activation?.eligible === true;
+    applied = signal.targetMetricV3?.mode === 'active' && signal.targetMetricV3?.activation?.eligible === true;
   }
 
   return {
@@ -160,6 +204,7 @@ function evaluateTargetMetricRuntime({
     contextComparability: resolvedContextComparability,
     bridge,
     witness,
+    femV1RuntimeTurn,
     applied,
   };
 }
@@ -167,6 +212,7 @@ function evaluateTargetMetricRuntime({
 module.exports = {
   TARGET_METRIC_RUNTIME_SCHEMA,
   evaluateTargetMetricRuntime,
+  resolveFemV1ShadowRuntime,
   resolveRuntimeContextComparability,
   resolveRuntimeCurriculumPhase,
   resolveTargetMetricStage,
