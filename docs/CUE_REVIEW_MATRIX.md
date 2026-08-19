@@ -1,110 +1,42 @@
-# Cue Review Matrix — TransVoice FEM v1
+# Cue Evidence Matrix
 
-**Status:** DRAFT — staged for owner approval. Per the product laws, no cue
-may be served to a learner until a named reviewer approves it. This matrix
-is the review surface: the narrow first-release set (GPT-Pro Arc 6), drawn
-from the existing `cue-library-v3.js` with clinical-review fields.
+**Status:** superseded specialist-gate model replaced for Pitch Shadow Alpha  
+**Current executable authority:** `backend/coaching/cue-alpha-qualification.js`  
+**Clinical claim:** none
 
-**Reviewer:** _______________ **Date:** _______ **Qualifications:** _______________
+This document used to require a named specialist signature before any first-release cue could progress. That made specialist availability an external staffing dependency. For the pitch-only alpha, that gate is replaced by the deterministic non-clinical qualification contract in `CUE_QUALIFICATION.md`.
 
----
+External specialist review can still be attached later as additional evidence. It must not be fabricated or backfilled as if it already occurred.
 
-## First-release cue set (5 cues)
+## Current cue matrix
 
-### C1. Comfortable pitch elicitation — primary
+| Cue | Alpha scope | Current authority | Demonstration |
+|---|---|---|---|
+| `pitch.register.small-glide-up.v1` | Pitch foundation, learner below reachable target | Eligible for executable non-clinical qualification | Not required for text-only alpha |
+| `pitch.register.small-glide-down.v1` | Downward pitch correction | Not in pitch-alpha allowlist | Not applicable |
+| `resonance.front-vowel.ee-anchor.v1` | Resonance | Research only | Future evidence contract required before activation |
+| `resonance.round-vowel.oh-anchor.v1` | Resonance | Research only | Future evidence contract required before activation |
+| `phonation.source-weight.vz-flow.v1` | Phonation/source weight | Research only | Future evidence contract required before activation |
+| `phonation.clarity.m-onset.v1` | Phonation/breathiness | Research only | Future evidence contract required before activation |
+| `prosody.contour.hum-then-words.v1` | Prosody | Research only | Future evidence contract required before activation |
+| `articulation.vowel-isolate-transfer.v1` | Articulation/resonance | Research only | Future evidence contract required before activation |
+| `transfer.same-sentence.v1` | Transfer | Research only | Not on pitch-alpha critical path |
 
-| Field | Value |
-|---|---|
-| cueId | `pitch.register.small-glide-up.v1` |
-| Skill / mastery stage | pitch / elicitation |
-| Learner instruction | Start on an easy hum at your normal note, glide only a small step upward, then open into the first word without getting louder. |
-| Intended acoustic effect | Median F0 moves upward a small, reachable step; loudness and effort stay steady |
-| Protected metrics | safety.effort, phonation.pressedness, intensity.level |
-| Contraindications | Any pain/strain report; effusive (pressed) phonation trending up |
-| Stop conditions | Pain, throat pain, effort ≥ 4/5 sustained over 2 takes |
-| Max reps per block | 6 |
-| Rest guidance | 30s pause every 6 attempts; water freely |
-| Fallback cue | C2 (hum into vowel) |
-| Required demonstration | Approved human recording of the glide (NOT TTS — plan law) |
-| Review checklist | ☐ wording safe ☐ no anatomy claim ☐ reachable step ☐ no forcing language ☐ fallback sound |
+## Pitch-alpha qualification evidence
 
-### C2. Easy onset / reset — hum into vowel
+The primary pitch cue may qualify only when the executable rubric verifies all of these properties from the cue object itself:
 
-| Field | Value |
-|---|---|
-| cueId | `pitch.register.small-glide-down.v2` (matrix-specific wording — supersedes v1 instruction text; on approval, the library entry is updated to v2 wording or a new cueId is minted so the approved wording IS the served wording) |
-| Skill / stage | pitch / elicitation (reset path) |
-| Learner instruction | Start with an easy hum, glide a small step down, then open into the first word without adding weight or volume. |
-| Intended effect | Registers a smaller, easier setting when the learner overshoots; recovery toward comfort |
-| Protected metrics | safety.effort, phonation.pressedness, intensity.level |
-| Contraindications | None beyond the global stop set |
-| Stop conditions | Global stop set only |
-| Max reps | 4 |
-| Rest guidance | Standard |
-| Fallback | End block; resume next session |
-| Demo | Approved human recording |
-| Review checklist | ☐ safe ☐ no anatomy ☐ comfort framing ☐ no "push down" language |
+- cue identity is explicitly in the narrow alpha allowlist;
+- scope is `pitch.register` and direction matches upward correction from below target;
+- safety object requires stop on pain, stop on increasing strain and never force;
+- effort, pressedness and loudness are protected metrics;
+- instruction uses a bounded small step and comfort/ease framing;
+- instruction/rationale/success text contains no force, squeeze, push-through, whisper or larynx-manipulation directive.
 
-### C3. Controlled /i/ resonance contrast
+Any failed rule returns `research_only`. A manually edited status string is not sufficient authority.
 
-| Field | Value |
-|---|---|
-| cueId | `resonance.front-vowel.ee-anchor.v1` |
-| Skill / stage | resonance / elicitation |
-| Learner instruction | Hold a comfortable "ee" on the same note you are already using. Keep the jaw easy and the lip spread small, then carry that vowel shape into "see me." |
-| Intended effect | Controlled-vowel formant movement (brighter /i/ family) with pitch protected (max 1.0 ST drift) |
-| Protected metrics | pitch.register (1.0 ST rule), safety.effort, phonation.pressedness |
-| Contraindications | Pitch instability in the same session; no validated controlled-vowel evidence (detector gate — formants are research-only until the corpus gate passes) |
-| Stop conditions | Global + pitch drift > 1.0 ST on 2 consecutive takes |
-| Max reps | 6 |
-| Rest | Standard |
-| Fallback | Return to pitch practice |
-| Demo | Approved human recording |
-| Review checklist | ☐ safe ☐ no anatomy claim ("resonance" language stays acoustic) ☐ pitch protection stated ☐ word transfer honest |
+## Demonstration policy
 
-### C4. Vowel-to-word transfer
+The first alpha cue is a simple self-produced easy hum, small upward glide and opening into a word. It is text-described and objectively observed on the learner's own attempt, so a prerecorded demonstration is not required. This removes a second artificial staffing dependency without substituting TTS for human acoustic truth.
 
-| Field | Value |
-|---|---|
-| cueId | `articulation.vowel-isolate-transfer.v1` (narrowed to /i/) |
-| Skill / stage | resonance / transfer |
-| Learner instruction | Say the target vowel by itself, then put it in one word, then the same short phrase. Make the smallest mouth-shape change that moves the measurement. |
-| Intended effect | Carries an elicited vowel feature into connected words without dragging the whole register |
-| Protected metrics | pitch.register (1.0 ST), safety.effort |
-| Contraindications | No prior verified controlled-vowel success in-session |
-| Stop conditions | Global set |
-| Max reps | 4 |
-| Demo | Approved human recording |
-| Review checklist | ☐ transfer framing honest ☐ no anatomy ☐ minimal-change language |
-
-### C5. Same-phrase retention
-
-| Field | Value |
-|---|---|
-| cueId | `transfer.same-sentence.v1` |
-| Skill / stage | transfer / retention |
-| Learner instruction | Keep the successful sound exactly as it was, but put it back into the full sentence. Do not add a new technique on this attempt. |
-| Intended effect | Tests whether an elicited feature survives connected speech without new technique |
-| Protected metrics | safety.effort |
-| Contraindications | None beyond global |
-| Stop conditions | Global |
-| Max reps | 2 |
-| Demo | None needed (uses the learner's own prior take) |
-| Review checklist | ☐ no-new-technique framing ☐ honest retention test |
-
----
-
-## Deliberately EXCLUDED from the first set
-
-- All phonation/weight cues (research-only per the policy)
-- All prosody cues (later curriculum extension)
-- Any cue with "force", "squeeze", "hold the larynx", "whisper", or
-  "push" language (banned outright — grep-verified absent from the five)
-
-## Approval rule
-
-A cue moves from `clinical-review-required` to `approved_internal` ONLY by
-the named reviewer signing its checklist above. No environment variable,
-agent action, or code path may manufacture approval. Human-recorded
-demonstrations are required before any learner-facing use (TTS is not
-acoustic authority — plan law).
+If a later cue depends on imitation, its demonstration requirement must be justified and validated as part of that cue's evidence contract.
