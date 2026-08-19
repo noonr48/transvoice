@@ -13,8 +13,8 @@ const {
 } = require('./feminization-v1-policy');
 const { normalizeBeginnerMasteryState } = require('./beginner-mastery');
 const { applyProductPolicyToBridge } = require('./product-policy-bridge');
-const { resolveFemV1RuntimeTurn } = require('./fem-v1-runtime-turn');
 const { resolvePitchAlphaCueForShadow } = require('./cue-alpha-authority');
+const { resolveFemV1ShadowSessionTurn } = require('./fem-v1-shadow-state');
 
 const TARGET_METRIC_RUNTIME_SCHEMA = 'transvoice.target_metric_runtime.v2';
 
@@ -78,12 +78,6 @@ function finalizedAttemptFromVoiceState(voiceState, captureEvidence, observation
   };
 }
 
-/**
- * Common FEM shadow adapter piggy-backed on the target-metric runtime seam.
- * Both the buffered coaching path and the SSE path already call this function,
- * so the two paths now execute the same FEM orchestration semantics without
- * introducing a second live mutation surface. FEM remains hard-shadow here.
- */
 function resolveFemV1ShadowRuntime({ voiceState, signal, bridge, stage, motorMap, masteryState }) {
   const observations = Array.isArray(bridge?.observations) ? bridge.observations : [];
   const captureEvidence = captureEvidenceFromSignal(signal);
@@ -92,8 +86,8 @@ function resolveFemV1ShadowRuntime({ voiceState, signal, bridge, stage, motorMap
   const finalizedAttempt = explicitEvent
     ? null
     : finalizedAttemptFromVoiceState(voiceState, captureEvidence, observations);
-  return resolveFemV1RuntimeTurn({
-    mode: 'shadow',
+  const resolved = resolveFemV1ShadowSessionTurn({
+    shadowState: voiceState?.femV1ShadowState || null,
     learnerState: {
       mastery: masteryState || voiceState?.beginnerMastery || null,
       motorResponseMap: motorMap || voiceState?.motorResponseMap || null,
@@ -102,53 +96,35 @@ function resolveFemV1ShadowRuntime({ voiceState, signal, bridge, stage, motorMap
       capabilityProfile: voiceState?.capabilityProfile || null,
     },
     sessionState: {
-      sessionId: voiceState?.sessionId || null,
+      sessionId: voiceState?.sessionId || explicitEvent?.sessionId || null,
       stage,
       pendingTrial: voiceState?.pendingTrial || null,
       revision: Number.isInteger(voiceState?.femV1Revision) ? voiceState.femV1Revision : null,
       attemptSequence: voiceState?.attemptSequence || voiceState?.attempSequence || null,
     },
+    sourceSessionRevision: Number.isInteger(voiceState?.femV1Revision) ? voiceState.femV1Revision : null,
     finalizedAttemptEvent: explicitEvent,
     finalizedAttempt,
     turnEvidence: explicitEvent ? null : { selfReport, captureEvidence, observations },
     cueResolver: resolvePitchAlphaCueForShadow,
   });
+  return {
+    ...resolved.turn,
+    nextShadowState: resolved.nextShadowState,
+  };
 }
 
-/**
- * Shared target-metric runtime boundary for buffered and SSE coaching.
- * Target-metric active mode retains its historical bridge behavior, but the
- * embedded FEM v1 orchestration is intentionally shadow-only until the FEM
- * active release gates are satisfied.
- */
 function evaluateTargetMetricRuntime({
-  voiceState = {},
-  signal = null,
-  repContext = null,
-  mode = 'shadow',
-  motorMap = null,
-  observations = null,
-  persistenceByDimension = {},
-  allowUnreviewedCues = false,
-  turnWindowStartedAt = undefined,
-  contextComparability = {},
-  sectionLoopActive = false,
-  productDomain = FEMINIZATION_V1_DOMAIN,
-  curriculumPhase = null,
-  masteryState = null,
+  voiceState = {}, signal = null, repContext = null, mode = 'shadow', motorMap = null,
+  observations = null, persistenceByDimension = {}, allowUnreviewedCues = false,
+  turnWindowStartedAt = undefined, contextComparability = {}, sectionLoopActive = false,
+  productDomain = FEMINIZATION_V1_DOMAIN, curriculumPhase = null, masteryState = null,
 } = {}) {
   const resolvedMode = ['off', 'shadow', 'active'].includes(mode) ? mode : 'shadow';
   if (resolvedMode === 'off') {
     return {
-      schema: TARGET_METRIC_RUNTIME_SCHEMA,
-      mode: 'off',
-      stage: null,
-      productDomain,
-      curriculumPhase: null,
-      bridge: null,
-      witness: null,
-      femV1RuntimeTurn: null,
-      applied: false,
+      schema: TARGET_METRIC_RUNTIME_SCHEMA, mode: 'off', stage: null, productDomain,
+      curriculumPhase: null, bridge: null, witness: null, femV1RuntimeTurn: null, applied: false,
     };
   }
 
@@ -156,33 +132,16 @@ function evaluateTargetMetricRuntime({
   const resolvedContextComparability = resolveRuntimeContextComparability(repContext, contextComparability);
   const resolvedCurriculumPhase = resolveRuntimeCurriculumPhase({ curriculumPhase, masteryState, voiceState });
   const researchBridge = safeBuildTargetMetricBridge({
-    voiceState,
-    motorMap,
-    stage,
-    mode: resolvedMode,
-    observations,
-    persistenceByDimension,
-    allowUnreviewedCues,
-    turnWindowStartedAt,
-    repContext,
-    practiceMode: signal?.mode || 'active_drill',
-    contextComparability: resolvedContextComparability,
+    voiceState, motorMap, stage, mode: resolvedMode, observations, persistenceByDimension,
+    allowUnreviewedCues, turnWindowStartedAt, repContext,
+    practiceMode: signal?.mode || 'active_drill', contextComparability: resolvedContextComparability,
   });
   const bridge = applyProductPolicyToBridge(researchBridge, {
-    productDomain,
-    curriculumPhase: resolvedCurriculumPhase,
-    voiceState,
-    motorMap,
-    stage,
+    productDomain, curriculumPhase: resolvedCurriculumPhase, voiceState, motorMap, stage,
   });
 
   const femV1RuntimeTurn = resolveFemV1ShadowRuntime({
-    voiceState,
-    signal,
-    bridge,
-    stage,
-    motorMap,
-    masteryState,
+    voiceState, signal, bridge, stage, motorMap, masteryState,
   });
 
   const baseWitness = buildTargetMetricShadowWitness(bridge, signal);
@@ -193,7 +152,6 @@ function evaluateTargetMetricRuntime({
     product_decision_observation_count: bridge?.productPolicy?.decisionObservationCount ?? null,
     product_excluded_observation_count: bridge?.productPolicy?.excludedObservationCount ?? null,
     product_exclusion_reasons: bridge?.productPolicy?.exclusionReasons || {},
-    // Privacy-bounded nested witness only; never raw observations/cue prose.
     fem_v1: femV1RuntimeTurn?.witness || null,
   } : null;
 
@@ -213,6 +171,7 @@ function evaluateTargetMetricRuntime({
     bridge,
     witness,
     femV1RuntimeTurn,
+    femV1NextShadowState: femV1RuntimeTurn?.nextShadowState || null,
     applied,
   };
 }
