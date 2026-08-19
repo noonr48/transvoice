@@ -153,11 +153,26 @@ function resolvePendingTrial({
   attemptSequence,
   motorResponseMap,
   nowMs,
+  attemptReplayed = false,
 }) {
   const trial = sessionState?.pendingTrial;
   if (!trial || typeof trial !== 'object' || trial.status !== 'pending') {
     return { status: 'not_applicable', result: 'no_pending_trial', trialId: null };
   }
+
+  // A finalized artifact that is already present in the canonical attempt
+  // sequence is not a new causal event. In particular it must never settle or
+  // invalidate a pending trial that was opened after the artifact was first
+  // consumed. Safety evidence remains visible to the controller below, but the
+  // exact-next causal window waits for a genuinely new finalized attempt.
+  if (attemptReplayed === true) {
+    return {
+      status: 'not_applicable',
+      result: 'attempt_replayed',
+      trialId: trial.trialId || null,
+    };
+  }
+
   const normalizedSelfReport = normalizeSelfReport(finalizedAttempt?.selfReport || {});
   const pain = normalizedSelfReport.pain === true || normalizedSelfReport.throatPain === true;
 
@@ -330,6 +345,7 @@ function resolveFemV1RuntimeTurn({
       attemptSequence: workingAttemptSequence,
       motorResponseMap: learnerState?.motorResponseMap || null,
       nowMs,
+      attemptReplayed: disposition?.replayed === true,
     });
   } else if (sessionState?.pendingTrial?.status === 'pending') {
     settlement = {
