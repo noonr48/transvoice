@@ -1,0 +1,8 @@
+[Unit]
+Description=TransVoice phone coaching stack
+Documentation=file:/opt/sloane/voice-tutor/deployment/README.md
+Wants=voice-trainer.service voice-tutor-gemma4-iq4nl-attnq8-last10.service voxcpm-tts.service voice-tutor-standalone.service
+After=network-online.target voice-trainer.service voice-tutor-gemma4-iq4nl-attnq8-last10.service voxcpm-tts.service
+
+[Install]
+WantedBy=default.target

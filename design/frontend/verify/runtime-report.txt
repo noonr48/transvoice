@@ -1,0 +1,62 @@
+design-verify runtime report
+============================
+target:     http://127.0.0.1:3021/app
+startedAt:  2026-07-22T09:10:25.581Z
+durationMs: 6938
+playwright: true
+
+WIDTH 360px
+-------------
+  console errors:  0
+  console warnings:0
+  page errors:     0
+  failed requests: 0
+  overflow:        no (scrollW=360 clientW=360, 0 offender(s))
+
+WIDTH 768px
+-------------
+  console errors:  0
+  console warnings:0
+  page errors:     0
+  failed requests: 0
+  overflow:        no (scrollW=768 clientW=768, 0 offender(s))
+
+WIDTH 1280px
+--------------
+  console errors:  0
+  console warnings:0
+  page errors:     0
+  failed requests: 0
+  overflow:        no (scrollW=1280 clientW=1280, 0 offender(s))
+
+TAB ORDER (1280)
+----------------
+  focusable in DOM:   136
+  interactive in DOM: 135
+  sequence length:    40
+  trapped:            no
+  issues:             0
+  first focused:
+    0. button#tv-coach-preset-button "Aster"
+    1. button#tv-coach-session-toggle "Start"
+    2. (body)
+    3. button#tv-coach-preset-button "Aster"
+    4. button#tv-coach-session-toggle "Start"
+    5. (body)
+    6. button#tv-coach-preset-button "Aster"
+    7. button#tv-coach-session-toggle "Start"
+
+REDUCED MOTION (1280)
+---------------------
+  running animations: 0
+
+SCREENSHOTS
+-----------
+  screenshots/w360.png
+  screenshots/w768.png
+  screenshots/w1280.png
+  screenshots/w1280-reduced.png
+
+HANDOFF: grade verify/screenshots/*.png against the critique template at
+design-frontend/references/critique-template.md. Native vision (Claude/GPT-5):
+read the PNGs directly. Text-only model: route them to the minicpm_vision MCP.

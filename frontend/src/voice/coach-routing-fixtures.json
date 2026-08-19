@@ -1,0 +1,208 @@
+{
+  "clarificationIntents": [
+    {
+      "text": "say that again",
+      "intent": "repeat"
+    },
+    {
+      "text": "go slower",
+      "intent": "repeat-slower"
+    },
+    {
+      "text": "move on",
+      "intent": "advance"
+    },
+    {
+      "text": "one more pass",
+      "intent": "hold"
+    },
+    {
+      "text": "too hard",
+      "intent": "easier"
+    },
+    {
+      "text": "push me",
+      "intent": "harder"
+    },
+    {
+      "text": "ready when you are",
+      "intent": "practice-ready"
+    },
+    {
+      "text": "give the mic back",
+      "intent": "practice-stop"
+    },
+    {
+      "text": "change focus to resonance",
+      "intent": null
+    },
+    {
+      "text": "i'm ready to give it a go",
+      "intent": "practice-ready"
+    },
+    {
+      "text": "don't move on",
+      "intent": "hold"
+    },
+    {
+      "text": "wait a bit",
+      "intent": "hold"
+    },
+    {
+      "text": "i'll try to go a bit higher",
+      "intent": null
+    },
+    {
+      "text": "i couldn't hit it again",
+      "intent": null
+    },
+    {
+      "text": "that felt a bit easier this time",
+      "intent": null
+    },
+    {
+      "text": "why does my voice crack when i go higher",
+      "intent": null
+    },
+    {
+      "text": "i want to keep going with the same line today",
+      "intent": null
+    },
+    {
+      "text": "okay let me try that take again",
+      "intent": "repeat"
+    }
+  ],
+  "routingDecisions": [
+    {
+      "text": "say that again",
+      "decision": {
+        "intent": "repeat",
+        "shouldDeferToFrontend": true,
+        "shouldEscalateToDeepTutor": false
+      }
+    },
+    {
+      "text": "go slower",
+      "decision": {
+        "intent": "repeat-slower",
+        "shouldDeferToFrontend": true,
+        "shouldEscalateToDeepTutor": false
+      }
+    },
+    {
+      "text": "one more pass",
+      "decision": {
+        "intent": "hold",
+        "shouldDeferToFrontend": true,
+        "shouldEscalateToDeepTutor": false
+      }
+    },
+    {
+      "text": "ready when you are",
+      "decision": {
+        "intent": "practice-ready",
+        "shouldDeferToFrontend": true,
+        "shouldEscalateToDeepTutor": false
+      }
+    },
+    {
+      "text": "give the mic back",
+      "decision": {
+        "intent": "practice-stop",
+        "shouldDeferToFrontend": true,
+        "shouldEscalateToDeepTutor": false
+      }
+    },
+    {
+      "text": "move on",
+      "decision": {
+        "intent": "advance",
+        "shouldDeferToFrontend": true,
+        "shouldEscalateToDeepTutor": false
+      }
+    },
+    {
+      "text": "too hard",
+      "decision": {
+        "intent": "easier",
+        "shouldDeferToFrontend": true,
+        "shouldEscalateToDeepTutor": true
+      }
+    },
+    {
+      "text": "push me",
+      "decision": {
+        "intent": "harder",
+        "shouldDeferToFrontend": true,
+        "shouldEscalateToDeepTutor": true
+      }
+    },
+    {
+      "text": "change focus to resonance",
+      "decision": {
+        "intent": null,
+        "shouldDeferToFrontend": false,
+        "shouldEscalateToDeepTutor": true
+      }
+    },
+    {
+      "text": "summarize my progress",
+      "decision": {
+        "intent": null,
+        "shouldDeferToFrontend": false,
+        "shouldEscalateToDeepTutor": true
+      }
+    },
+    {
+      "text": "what should I listen for on the ending?",
+      "decision": {
+        "intent": null,
+        "shouldDeferToFrontend": false,
+        "shouldEscalateToDeepTutor": false
+      }
+    }
+  ],
+  "handlingDecisions": [
+    {
+      "text": "say that again",
+      "hasActiveGuideSession": true,
+      "decision": {
+        "route": "deeptutor-brief-action",
+        "channel": "shortcut"
+      }
+    },
+    {
+      "text": "move on",
+      "hasActiveGuideSession": true,
+      "decision": {
+        "route": "deeptutor-advance",
+        "channel": "deeptutor"
+      }
+    },
+    {
+      "text": "change focus to resonance",
+      "hasActiveGuideSession": true,
+      "decision": {
+        "route": "deeptutor-guide",
+        "channel": "deeptutor"
+      }
+    },
+    {
+      "text": "what should I listen for on the ending?",
+      "hasActiveGuideSession": true,
+      "decision": {
+        "route": "deeptutor-realtime",
+        "channel": "runtime"
+      }
+    },
+    {
+      "text": "what should I listen for on the ending?",
+      "hasActiveGuideSession": false,
+      "decision": {
+        "route": "legacy",
+        "channel": "legacy"
+      }
+    }
+  ]
+}

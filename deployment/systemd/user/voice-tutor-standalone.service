@@ -1,0 +1,23 @@
+[Unit]
+Description=SLOANE Voice Tutor Standalone Gateway
+Documentation=file:/opt/sloane/voice-tutor/deployment/README.md
+Wants=network-online.target voice-trainer.service voice-tutor-gemma4-iq4nl-attnq8-last10.service voxcpm-tts.service
+After=network-online.target voice-trainer.service voice-tutor-gemma4-iq4nl-attnq8-last10.service voxcpm-tts.service
+PartOf=transvoice.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sloane/voice-tutor/backend
+Environment=NODE_ENV=production
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/sloane/voice-standalone.env
+ExecStart=/usr/bin/env node /opt/sloane/voice-tutor/backend/voice-standalone-server.js
+ExecStartPost=/opt/sloane/voice-tutor/scripts/wait-for-transvoice-gateway.sh
+TimeoutStartSec=60
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGINT
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,41 @@
+design-lint report
+==================
+
+### LINT7 [WARN] — Spacing prop with raw px/rem/em literal outside token sheets (14)
+  frontend/voice-tutor-app.html:81  padding: 0 16px;
+  frontend/voice-tutor-app.html:103  top: 54px;
+  frontend/voice-tutor-app.html:109  padding: 10px;
+  frontend/voice-tutor-app.html:115  #tv-coach-preset-list { display: grid; gap: 5px; }
+  frontend/voice-tutor-app.html:119  padding: 10px 12px;
+  frontend/voice-tutor-app.html:129  #tv-coach-upload-open { margin-top: 7px; border-top: 1px solid var(--coach-bord…
+  frontend/voice-tutor-app.html:130  .tv-coach-preset-empty { margin: 8px 10px; color: var(--coach-muted); font-size…
+  frontend/voice-tutor-app.html:131  #tv-coach-upload-form { display: grid; gap: 10px; padding: 6px 2px 2px; }
+  frontend/voice-tutor-app.html:131  #tv-coach-upload-form { display: grid; gap: 10px; padding: 6px 2px 2px; }
+  frontend/voice-tutor-app.html:132  #tv-coach-upload-form label { display: grid; gap: 6px; color: var(--coach-muted…
+  frontend/voice-tutor-app.html:136  padding: 9px 11px;
+  frontend/voice-tutor-app.html:142  .tv-coach-upload-actions { display: grid; grid-template-columns: 1fr 1fr; gap: …
+  frontend/voice-tutor-app.html:219  margin: -1px;
+  frontend/voice-tutor-app.html:249  padding: 12px 24px;
+
+### LINT8 [WARN] — border-radius raw length literal outside token sheets (4)
+  frontend/voice-tutor-app.html:86  border-radius: 999px;
+  frontend/voice-tutor-app.html:122  border-radius: 12px;
+  frontend/voice-tutor-app.html:138  border-radius: 11px;
+  frontend/voice-tutor-app.html:251  border-radius: 999px;
+
+### LINT9 [WARN] — font-size raw literal outside token sheets (4)
+  frontend/voice-tutor-app.html:130  .tv-coach-preset-empty { margin: 8px 10px; color: var(--coach-muted); font-size…
+  frontend/voice-tutor-app.html:132  #tv-coach-upload-form label { display: grid; gap: 6px; color: var(--coach-muted…
+  frontend/voice-tutor-app.html:237  font-size: 14px;
+  frontend/voice-tutor-app.html:254  font-size: 18px;
+
+Hue census: 0 saturated families (budget 4) → (none)
+
+Summary
+rule    | severity | count
+--------|----------|------
+LINT7   | warn     | 14
+LINT8   | warn     | 4
+LINT9   | warn     | 4
+
+Total findings: 22 (0 error-severity)

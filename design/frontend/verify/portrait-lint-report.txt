@@ -1,0 +1,72 @@
+design-lint report
+==================
+
+### LINT7 [WARN] — Spacing prop with raw px/rem/em literal outside token sheets (83)
+  src/voice/voice-tutor-redesign.css:198  margin-top: 2px;
+  src/voice/voice-tutor-redesign.css:271  padding: 4px 10px;
+  src/voice/voice-tutor-redesign.css:297  gap: 6px;
+  src/voice/voice-tutor-redesign.css:382  padding: 6px 10px;
+  src/voice/voice-tutor-redesign.css:395  padding-right: 28px;
+  src/voice/voice-tutor-redesign.css:420  gap: 6px;
+  src/voice/voice-tutor-redesign.css:421  padding: 4px 10px;
+  src/voice/voice-tutor-redesign.css:519  gap: 6px;
+  src/voice/voice-tutor-redesign.css:551  gap: 6px;
+  src/voice/voice-tutor-redesign.css:607  gap: 6px;
+  src/voice/voice-tutor-redesign.css:608  padding: 8px 16px;
+  src/voice/voice-tutor-redesign.css:653  padding: 3px 10px;
+  src/voice/voice-tutor-redesign.css:717  margin-top: 4px;
+  src/voice/voice-tutor-redesign.css:724  padding: 3px 10px;
+  src/voice/voice-tutor-redesign.css:755  margin-bottom: 4px;
+  src/voice/voice-tutor-redesign.css:789  margin-top: 2px;
+  src/voice/voice-tutor-redesign.css:817  left: 12px;
+  src/voice/voice-tutor-redesign.css:818  top: 12px;
+  src/voice/voice-tutor-redesign.css:824  bottom: 12px;
+  src/voice/voice-tutor-redesign.css:831  inset: 30px;
+  (+63 more)
+
+### LINT8 [WARN] — border-radius raw length literal outside token sheets (11)
+  src/voice/voice-tutor-redesign.css:144  border-radius: 3px;
+  src/voice/voice-tutor-redesign.css:659  border-radius: 100px;
+  src/voice/voice-tutor-redesign.css:732  border-radius: 100px;
+  src/voice/voice-tutor-redesign.css:1028  border-radius: 999px;
+  src/voice/voice-tutor-redesign.css:1072  border-radius: 999px;
+  src/voice/voice-tutor-redesign.css:1094  border-radius: 100px;
+  src/voice/voice-tutor-redesign.css:1187  border-radius: 100px;
+  src/voice/voice-tutor-redesign.css:1378  border-radius: 999px;
+  src/voice/voice-tutor-redesign.css:2117  border-radius: 999px;
+  src/voice/voice-tutor-redesign.css:2992  border-radius: 999px;
+  src/voice/voice-tutor-redesign.css:3034  border-radius: 14px;
+
+### LINT9 [WARN] — font-size raw literal outside token sheets (13)
+  src/voice/voice-tutor-redesign.css:808  font-size: 10px;
+  src/voice/voice-tutor-redesign.css:1144  font-size: 0.62em;
+  src/voice/voice-tutor-redesign.css:1662  font-size: 10px;
+  src/voice/voice-tutor-redesign.css:1963  font-size: 0.85em;
+  src/voice/voice-tutor-redesign.css:2092  font-size: 10px;
+  src/voice/voice-tutor-redesign.css:2110  font-size: 10px;
+  src/voice/voice-tutor-redesign.css:2154  .voice-lesson-emph-0 { font-weight: 400; font-size: 0.86em; }
+  src/voice/voice-tutor-redesign.css:2155  .voice-lesson-emph-1 { font-weight: 500; font-size: 1em; }
+  src/voice/voice-tutor-redesign.css:2158  font-size: 1.08em;
+  src/voice/voice-tutor-redesign.css:2163  font-size: 1.18em;
+  src/voice/voice-tutor-redesign.css:2238  font-size: 10px;
+  src/voice/voice-tutor-redesign.css:2250  font-size: 10px;
+  src/voice/voice-tutor-redesign.css:3047  font-size: 16px;
+
+### LINT10 [WARN] — Saturated-hue budget exceeded (accent sprawl) (1)
+  (aggregate):1  5 saturated hue families > budget 4: ~173°×12, ~39°×4, ~101°×3, ~0°×2, ~266°×1
+
+### LINT18 [WARN] — HTML missing lang= or viewport meta (1)
+  src/voice/templates/voice-tutor-template.html:1  missing <meta name="viewport">
+
+Hue census: 5 saturated families (budget 4) → ~173°×12, ~39°×4, ~101°×3, ~0°×2, ~266°×1
+
+Summary
+rule    | severity | count
+--------|----------|------
+LINT7   | warn     | 83
+LINT8   | warn     | 11
+LINT9   | warn     | 13
+LINT10  | warn     | 1
+LINT18  | warn     | 1
+
+Total findings: 109 (0 error-severity)

@@ -1,0 +1,11 @@
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.env
+dist/
+.pytest_cache/
+*.wav
+!backend/tests/fixtures/*.wav
+app-state/
+.DS_Store

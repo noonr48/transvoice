@@ -1,0 +1,938 @@
+// Mirror of #voice-panel + #voice-lab-panel from src/voice/templates/voice-tutor-template.html.
+// Keep byte-synced with that source (enforced by standalone-dom.test.ts); edit both together.
+export const VOICE_TUTOR_STANDALONE_TEMPLATE_SOURCE = 'generated:src/voice/templates/voice-tutor-template.html#voice-panel+voice-lab-panel';
+
+const voiceTutorStandaloneTemplateHtml = `<div class="voice-panel hidden" id="voice-panel">
+            <div class="voice-panel-header">
+              <span class="voice-panel-title">🎙️ Voice Tutor</span>
+              <span class="voice-panel-badge" id="voice-sidebar-preset">cute-feminine</span>
+            </div>
+
+            <div class="voice-card-grid">
+              <div class="voice-card">
+                <span class="voice-card-label">Service</span>
+                <strong id="voice-service-health">Checking trainer…</strong>
+              </div>
+              <div class="voice-card">
+                <span class="voice-card-label">Session</span>
+                <strong id="voice-session-status">Idle</strong>
+              </div>
+              <div class="voice-card">
+                <span class="voice-card-label">Mastery</span>
+                <strong id="voice-student-mastery">STANDBY</strong>
+              </div>
+              <div class="voice-card">
+                <span class="voice-card-label">Review Queue</span>
+                <strong id="voice-student-review-count">standby</strong>
+              </div>
+              <div class="voice-card">
+                <span class="voice-card-label">Knowledge</span>
+                <strong id="voice-knowledge-status">Checking compile…</strong>
+              </div>
+            </div>
+
+            <div class="voice-card">
+              <span class="voice-card-label">Tracked Skills</span>
+              <p id="voice-student-concepts">No voice skills tracked yet. End a scored take to start building your review map.</p>
+            </div>
+            <div class="voice-card">
+              <span class="voice-card-label">Practice Focus</span>
+              <p id="voice-student-focus">Keep ending takes to let the mastery model surface weak spots and spaced-review drills.</p>
+            </div>
+            <div class="voice-card">
+              <span class="voice-card-label">Learner Context</span>
+              <p id="voice-learner-context-status">No local learner context loaded yet.</p>
+              <p id="voice-learner-context-dataset">Dataset export blocked until learner context is available.</p>
+              <p id="voice-learner-context-notepad">No planner handoff yet.</p>
+            </div>
+            <div class="voice-card">
+              <span class="voice-card-label">Reference Clip</span>
+              <p id="voice-reference-summary">Drop in a target clip to compare your resonance and pitch path.</p>
+            </div>
+            <div class="voice-card">
+              <span class="voice-card-label">Target Voice</span>
+              <p id="voice-target-profile-summary">Load a longer target clip to derive a reusable voice profile and phrase map.</p>
+            </div>
+            <div class="voice-card">
+              <span class="voice-card-label">Current Drill</span>
+              <p id="voice-current-drill">Guided drills will load once the voice session connects.</p>
+            </div>
+            <div class="voice-card">
+              <span class="voice-card-label">Recommended Drills</span>
+              <div id="voice-recommended-drills" class="voice-pill-list">
+                <span class="voice-pill">Waiting for drill pack…</span>
+              </div>
+            </div>
+            <div class="voice-card">
+              <span class="voice-card-label">Latest Read</span>
+              <p id="voice-summary-overview-sidebar">Start a practice take to generate instant graph feedback and post-take notes.</p>
+            </div>
+          </div>
+<div id="voice-lab-panel" class="voice-lab-panel hidden">
+          <section id="voice-front-door" class="voice-front-door hidden">
+            <div class="voice-front-door-card voice-front-door-welcome" id="voice-front-door-welcome">
+              <span class="voice-chip-label">Voice Tutor</span>
+              <h3>Practice your voice with a coach — not a scoreboard.</h3>
+              <p>A quiet practice room. Bring the voice you're moving toward; your coach listens, demonstrates, and helps you stay comfortable. No scores or streaks.</p>
+              <ul class="voice-front-door-welcome-list">
+                <li>Practice real moments — a café order, a phone call — with your coach playing the other person.</li>
+                <li>Take one sentence a day, the kind you'd actually say.</li>
+                <li>Hear how your voice changes over time, side by side.</li>
+              </ul>
+              <div class="voice-front-door-actions">
+                <button type="button" id="voice-front-door-begin" class="voice-btn voice-btn-primary">Let's begin</button>
+                <button type="button" id="voice-front-door-explore" class="voice-btn voice-btn-secondary">Just look around first</button>
+              </div>
+            </div>
+            <div class="voice-front-door-card hidden" id="voice-front-door-chooser">
+              <span class="voice-chip-label">Your target voice</span>
+              <h3>Bring the voice you want to move toward</h3>
+              <p>Upload or record a short clip of the voice you're aiming for. We derive your target from the sample itself — no gender rules, just the sound you choose.</p>
+              <div class="voice-front-door-actions">
+                <label class="voice-btn voice-btn-primary" role="button" tabindex="0">
+                  <input type="file" id="voice-front-door-input" accept=".wav,.mp3,.m4a,.ogg,.flac,.aac" hidden="">
+                  Upload a target voice
+                </label>
+                <button type="button" id="voice-front-door-record" class="voice-btn voice-btn-secondary">Record from mic</button>
+                <!-- Abandon-trigger fix 1: the preset path is a PEER of record/upload,
+                     not a small-print escape — no sample is a fine way to start. -->
+                <button type="button" id="voice-front-door-skip" class="voice-btn voice-btn-secondary">Start now with a preset — add your voice later</button>
+              </div>
+              <p class="voice-front-door-record-hint">Recording reads ~10–20 seconds of you speaking, captured as clean audio.</p>
+              <p id="voice-front-door-mic-denied" class="voice-front-door-mic-denied hidden" role="status" aria-live="polite"></p>
+              <button type="button" id="voice-front-door-mic-check" class="voice-front-door-fallback">Not sure about your mic? Run a quick check</button>
+            </div>
+            <!-- Saved-voice picker: the preset escape lands here when saved voices
+                 exist — tap one, start practicing. Populated by standalone-app. -->
+            <div class="voice-front-door-card hidden" id="voice-front-door-presets">
+              <span class="voice-chip-label">Pick a voice</span>
+              <h3>Choose a voice to head toward</h3>
+              <p>Your saved voices. Tap one and start practicing — you can change it anytime.</p>
+              <div id="voice-front-door-preset-list" class="voice-front-door-preset-list"></div>
+              <p id="voice-front-door-presets-error" class="voice-front-door-mic-denied hidden" role="status" aria-live="polite"></p>
+              <button type="button" id="voice-front-door-presets-back" class="voice-front-door-fallback">Back</button>
+            </div>
+            <div class="voice-front-door-recording hidden" id="voice-front-door-recording" aria-live="polite">
+              <span class="voice-chip-label">Recording your target voice</span>
+              <p class="voice-front-door-record-guide">Speak naturally — a sentence or two. We'll listen for about 10–20 seconds.</p>
+              <div class="voice-record-meter">
+                <span class="voice-record-dot" aria-hidden="true"></span>
+                <span class="voice-record-elapsed" id="voice-front-door-record-elapsed">0.0s</span>
+              </div>
+              <div class="voice-front-door-record-actions">
+                <button type="button" id="voice-front-door-record-stop" class="voice-btn voice-btn-primary" disabled="">Stop &amp; use this</button>
+                <button type="button" id="voice-front-door-record-cancel" class="voice-btn voice-btn-secondary">Cancel</button>
+              </div>
+              <p class="voice-front-door-record-min" id="voice-front-door-record-min">Keep going — need a few more seconds before this is usable…</p>
+            </div>
+            <div class="voice-front-door-report hidden" id="voice-front-door-report" aria-live="polite"></div>
+          </section>
+
+          <!-- Consumer-hardware wave: first-run mic check. A calm ~10s two-phase
+               listen (quiet room, then one easy line) that tells the person in
+               plain words how their mic and room sound — ink, no red, no scores.
+               Offered before the target-voice capture on first run, re-runnable
+               from the front door and the advanced drawer, and re-offered when
+               the input device changes. Wired by mic-check.ts. -->
+          <section id="voice-mic-check" class="voice-mic-check hidden" role="dialog" aria-modal="true" aria-label="Mic check" aria-live="polite">
+            <div class="voice-mic-check-card">
+              <span class="voice-chip-label">Mic check</span>
+              <h3 id="voice-mic-check-title">Let&#8217;s hear the room first</h3>
+              <p id="voice-mic-check-copy">Two small steps — a moment of quiet, then one easy line. Quick and done.</p>
+              <p id="voice-mic-check-line" class="voice-mic-check-line hidden">&#8220;Here I am, saying one easy line out loud.&#8221;</p>
+              <div class="voice-mic-check-meter" aria-hidden="true"><span id="voice-mic-check-progress" class="voice-mic-check-progress"></span></div>
+              <p id="voice-mic-check-verdict" class="voice-mic-check-verdict hidden"></p>
+              <div class="voice-front-door-actions">
+                <button type="button" id="voice-mic-check-start" class="voice-btn voice-btn-primary">Start the mic check</button>
+                <button type="button" id="voice-mic-check-close" class="voice-btn voice-btn-secondary">Not now</button>
+              </div>
+            </div>
+          </section>
+
+          <section id="voice-welcome-back" class="voice-welcome-back hidden" aria-live="polite">
+            <div class="voice-welcome-back-card">
+              <span class="voice-chip-label">Welcome back</span>
+              <h3 id="voice-welcome-back-title">Welcome back</h3>
+              <p id="voice-welcome-back-target" class="voice-welcome-back-target"></p>
+              <p id="voice-welcome-back-stat" class="voice-welcome-back-stat"></p>
+              <div class="voice-welcome-back-actions">
+                <button type="button" id="voice-welcome-back-continue" class="voice-btn voice-btn-primary">Continue practice</button>
+                <button type="button" id="voice-welcome-back-change" class="voice-welcome-back-fallback">Change target voice</button>
+              </div>
+              <p id="voice-welcome-back-note" class="voice-welcome-back-note hidden" aria-live="polite"></p>
+            </div>
+          </section>
+
+          <section class="voice-studio-hero">
+            <h2>Voice Tutor</h2>
+            <p>Live practice, reference clips, and post-take coaching</p>
+          </section>
+
+          <nav id="voice-session-spine" class="voice-session-spine" aria-label="Session progress">
+            <span class="voice-spine-step" data-stage="warmup">Warm-up</span>
+            <span class="voice-spine-step" data-stage="target">Target</span>
+            <span class="voice-spine-step" data-stage="practice">Practice</span>
+            <span class="voice-spine-step" data-stage="review">Review</span>
+          </nav>
+          <p id="voice-spine-hint" class="voice-spine-hint">Upload the voice you want to move toward.</p>
+
+          <!-- Lesson surface (Wave B): always-visible single focus for today. -->
+          <div id="voice-lesson-focus-banner" class="voice-lesson-focus-banner voice-lesson-focus-placeholder" role="status" aria-live="polite">
+            <span class="voice-lesson-focus-eyebrow">Today</span>
+            <span id="voice-lesson-focus-text" class="voice-lesson-focus-text">Pick a line and take it — your focus sets from what the take shows.</span>
+            <span id="voice-lesson-focus-axis" class="voice-lesson-focus-axis hidden"></span>
+          </div>
+
+          <!-- Lesson surface (v1.5): one real sentence a day — a slim card near
+               the focus banner. An OFFER, never an obligation: no streak, no
+               badge. Empty -> a quiet invite + "Choose with the coach"; picked ->
+               the sentence + a plain-words status. Sits quietly when unset. -->
+          <div id="voice-lesson-sentence-slot" class="voice-lesson-sentence-slot" aria-label="Today’s one real sentence">
+            <div id="voice-lesson-sentence-empty" class="voice-lesson-sentence-empty">
+              <p id="voice-lesson-sentence-empty-line" class="voice-lesson-sentence-line">Pick one real sentence for today — something you’ll actually say.</p>
+              <button id="voice-lesson-sentence-choose" class="voice-lesson-sentence-choose" type="button" aria-label="Choose today’s sentence with the coach">Choose with the coach</button>
+            </div>
+            <div id="voice-lesson-sentence-chooser" class="voice-lesson-sentence-chooser hidden">
+              <p class="voice-lesson-sentence-line">One sentence you’ll actually say today:</p>
+              <div id="voice-lesson-sentence-suggestions" class="voice-lesson-sentence-suggestions" role="group" aria-label="Suggested sentences"></div>
+              <input type="text" id="voice-lesson-sentence-input" class="voice-lesson-sentence-input" maxlength="120" placeholder="…or write your own" aria-label="Write today’s sentence (up to 120 characters)">
+              <div class="voice-lesson-sentence-chooser-actions">
+                <button id="voice-lesson-sentence-pick" class="voice-lesson-sentence-pick" type="button" aria-label="Pick this sentence for today">Pick it</button>
+                <button id="voice-lesson-sentence-cancel" class="voice-lesson-sentence-cancel" type="button" aria-label="Cancel choosing a sentence">Not now</button>
+              </div>
+            </div>
+            <div id="voice-lesson-sentence-picked" class="voice-lesson-sentence-picked hidden">
+              <span class="voice-lesson-sentence-eyebrow">Today’s sentence</span>
+              <p id="voice-lesson-sentence-text" class="voice-lesson-sentence-text-picked"></p>
+              <span id="voice-lesson-sentence-status" class="voice-lesson-sentence-status hidden"></span>
+            </div>
+          </div>
+
+          <div class="voice-cockpit-toolbar">
+            <label class="voice-control">
+              <span>Preset</span>
+              <select id="voice-target-preset">
+                <optgroup label="Feminine">
+                  <option value="cute-feminine">Cute Feminine</option>
+                  <option value="everyday-feminine">Everyday Feminine</option>
+                  <option value="bright-playful">Bright Playful</option>
+                  <option value="australian-bright-feminine">Australian Bright Feminine</option>
+                  <option value="soft-feminine">Soft Feminine</option>
+                </optgroup>
+              </select>
+            </label>
+
+            <div class="voice-status-strip voice-status-strip-cockpit">
+              <div class="voice-status-chip">
+                <span class="voice-chip-label">Graph</span>
+                <strong id="voice-graph-status">Waiting for tutor</strong>
+              </div>
+            </div>
+
+            <div class="voice-lab-actions">
+              <label class="voice-upload-btn">
+                <input type="file" id="voice-reference-input" accept=".wav,.mp3,.m4a,.ogg,.flac,.aac" hidden="">
+                Load Reference
+              </label>
+              <button id="voice-advanced-toggle" class="voice-btn voice-btn-secondary" type="button" aria-expanded="false">Advanced</button>
+            </div>
+          </div>
+
+          <section class="voice-script-pad">
+
+            <div class="voice-script-performance">
+              <span class="voice-script-performance-label">Sound spelling</span>
+              <!-- Surfacing wave: quiet toggle for the sound-spelling cue layer. -->
+              <button type="button" id="voice-sound-spelling-toggle" class="voice-sound-spelling-toggle" aria-pressed="true">Sound-spelling: on</button>
+              <p id="voice-active-line-performance">Load a line to see how the target delivery should sound.</p>
+            </div>
+
+            <div id="voice-active-line-cues" class="voice-script-cues">
+              <span class="voice-pill">Waiting for cue focus…</span>
+            </div>
+
+            <div class="voice-script-note">
+              <span class="voice-script-performance-label">Tutor note</span>
+              <p id="voice-lesson-board-note">Notes gather here as you take lines — from the takes themselves, and from the coach when it’s on.</p>
+            </div>
+
+            <div class="voice-script-practice">
+              <div class="voice-script-summary">
+                <span class="voice-script-performance-label">Latest read</span>
+                <p id="voice-summary-overview">Start a practice take to generate instant graph feedback and post-take notes.</p>
+              </div>
+            </div>
+
+            <!-- Declutter (2026-07-19): three primary line moves stay visible;
+                 Guided Coach / Advance Lesson / Regenerate / Pin Line fold into
+                 the quiet "More" disclosure (line-overflow.ts owns the toggle). -->
+            <div id="voice-line-actions" class="voice-script-actions">
+              <button id="voice-line-next" class="voice-btn voice-btn-primary" type="button">Next Line</button>
+              <button id="voice-line-easier" class="voice-btn voice-btn-secondary voice-line-secondary-action" type="button">Easier</button>
+              <button id="voice-line-harder" class="voice-btn voice-btn-secondary voice-line-secondary-action" type="button">Harder</button>
+              <button id="voice-line-more-toggle" class="voice-btn voice-btn-secondary voice-line-more-toggle" type="button" aria-expanded="false" aria-controls="voice-line-overflow" aria-label="More line actions">⋯ More</button>
+              <div id="voice-line-overflow" class="voice-line-overflow hidden">
+                <div id="voice-lesson-actions" class="voice-script-actions">
+                  <button id="voice-deeptutor-start" class="voice-btn voice-btn-secondary voice-line-secondary-action" type="button">Guided Coach</button>
+                  <button id="voice-deeptutor-next" class="voice-btn voice-btn-secondary voice-line-secondary-action" type="button">Advance Lesson</button>
+                </div>
+                <button id="voice-line-regenerate" class="voice-btn voice-btn-secondary voice-line-secondary-action" type="button">Regenerate</button>
+                <button id="voice-line-pin" class="voice-btn voice-btn-secondary voice-line-secondary-action" type="button">Pin Line</button>
+              </div>
+            </div>
+          </section>
+
+          <div class="voice-cockpit-grid">
+            <div class="voice-cockpit-main">
+              <!-- Co-located (redesign): the current line + lesson card sit DIRECTLY
+                   above the live graph so the line→dot loop reads in one glance. -->
+              <div class="voice-script-pad-top">
+                <div class="voice-hero-line">
+                  <span id="voice-script-pad-label" class="voice-script-pad-label">Lesson board</span>
+                  <h3 id="voice-active-line-text">Waiting for your first line...</h3>
+                  <!-- Surfacing wave: speak the current line through the existing TTS path. -->
+                  <button type="button" id="voice-hear-line" class="voice-hear-line" disabled="">Hear it in your target voice</button>
+                </div>
+                <div id="voice-active-line-meta" class="voice-script-meta">
+                  <span class="voice-pill">No line yet</span>
+                </div>
+                <div id="voice-lesson-card" class="voice-lesson-card" role="group" aria-label="Practice card">
+                  <div id="voice-lesson-card-strip" class="voice-lesson-card-strip" aria-live="polite">
+                    <span class="voice-lesson-card-empty">Your tutor is preparing a phrase…</span>
+                  </div>
+                  <p class="voice-lesson-keymap-hint" aria-hidden="false">
+                    <kbd>Space</kbd> try again · <kbd>Enter</kbd> next · <kbd>R</kbd> listen back · type to ask a question
+                  </p>
+                  <p id="voice-lesson-guardian-hint" class="voice-lesson-guardian-hint hidden" role="status" aria-live="polite" aria-hidden="true"></p>
+                </div>
+              </div>
+              <section id="voice-stage-panel" class="voice-stage-panel">
+                <div class="voice-stage-header">
+                  <div>
+                    <span class="voice-chip-label">Stage map</span>
+                    <h4>XY trainer map</h4>
+                    <p>Pitch climbs upward. Brighter resonance moves right. Dot color tracks weight. Dot size tracks vocal size from small-dog to big-dog.</p>
+                  </div>
+                  <span class="voice-stage-badge" id="voice-stage-session">No live take</span>
+                  <!-- Lesson surface (v1.5): entry to the time-lapse mirror. A
+                       small, calm link — the person's own recorded arc. -->
+                  <button id="voice-lesson-mirror-link" class="voice-lesson-mirror-link" type="button" aria-label="Open your arc — your pinned takes over time">Your arc</button>
+                </div>
+
+                <p id="voice-live-cue" class="voice-live-cue" aria-live="polite">Ready when you are — start a take to get live coaching.</p>
+
+                <div id="voice-graph-shell" class="voice-graph-shell" role="img" aria-label="Voice trainer XY map: pitch on the vertical axis, resonance on the horizontal axis.">
+                  <span class="voice-axis-label voice-axis-label-y">Pitch ↑</span>
+                  <!-- Lesson surface (Wave B): whisper-quiet quadrant hints. -->
+                  <span class="voice-lesson-quadrant voice-lesson-quadrant-top" aria-hidden="true">↑ higher</span>
+                  <span class="voice-lesson-quadrant voice-lesson-quadrant-right" aria-hidden="true">brighter →</span>
+                  <span class="voice-lesson-quadrant voice-lesson-quadrant-bottom" aria-hidden="true">↓ lower</span>
+                  <span class="voice-lesson-quadrant voice-lesson-quadrant-left" aria-hidden="true">← warmer</span>
+                  <div class="voice-graph-grid">
+                    <div class="voice-graph-target"></div>
+                    <!-- Lesson surface (Wave B): soft target region from the reference bands. -->
+                    <div id="voice-lesson-target-region" class="voice-lesson-target-region hidden" aria-hidden="true"></div>
+                    <div class="voice-graph-crosshair voice-graph-crosshair-x"></div>
+                    <div class="voice-graph-crosshair voice-graph-crosshair-y"></div>
+                    <svg class="voice-reference-path hidden" id="voice-reference-path" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                      <polyline id="voice-reference-polyline"></polyline>
+                    </svg>
+                    <svg class="voice-forecast-path hidden" id="voice-forecast-path" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                      <polyline id="voice-forecast-corridor" class="voice-forecast-corridor"></polyline>
+                      <polyline id="voice-forecast-polyline"></polyline>
+                    </svg>
+                    <svg class="voice-live-path hidden" id="voice-live-path" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                      <polyline id="voice-live-polyline"></polyline>
+                    </svg>
+                    <div class="voice-reference-dot hidden" id="voice-reference-dot"></div>
+                    <div class="voice-graph-dot" id="voice-graph-dot"></div>
+                  </div>
+                  <span class="voice-axis-label voice-axis-label-x">← Darker resonance • Brighter resonance →</span>
+                </div>
+
+                <div class="voice-stage-overlays" role="group" aria-label="Voice graph overlay visibility">
+                  <button type="button" class="voice-overlay-toggle active" id="voice-toggle-live-path">
+                    <span class="voice-overlay-swatch live"></span>
+                    Live trail (your voice, solid)
+                  </button>
+                  <button type="button" class="voice-overlay-toggle active" id="voice-toggle-forecast-path">
+                    <span class="voice-overlay-swatch forecast"></span>
+                    Phrase map (dashed)
+                  </button>
+                  <button type="button" class="voice-overlay-toggle active" id="voice-toggle-reference-path">
+                    <span class="voice-overlay-swatch reference"></span>
+                    Reference trail (target, dotted)
+                  </button>
+                </div>
+
+                <div class="voice-reference-block voice-stage-reference-block">
+                  <span class="voice-chip-label">Reference mimic target</span>
+                  <audio id="voice-reference-player" class="voice-reference-player hidden" controls="" preload="none"></audio>
+                  <div id="voice-reference-mimic-meta" class="voice-script-meta">
+                    <span class="voice-pill">Waiting for target</span>
+                  </div>
+                  <p id="voice-reference-playback-copy" class="voice-reference-help">Load a mimic target to compare your live shape against the reference trail.</p>
+                </div>
+
+                <div class="voice-practice-transport voice-practice-transport-focus">
+                  <span class="voice-chip-label">Practice</span>
+                  <div class="voice-inline-actions">
+                    <button id="voice-start-session" class="voice-btn voice-btn-primary">Start take</button>
+                    <button id="voice-end-session" class="voice-btn voice-btn-secondary" disabled="">Finish Take</button>
+                  </div>
+                </div>
+                <div class="voice-stage-meta">
+                  <div class="voice-stage-stat">
+                    <span>Target</span>
+                    <strong id="voice-stage-target">cute-feminine</strong>
+                  </div>
+                  <div class="voice-stage-stat">
+                    <span>Reference</span>
+                    <strong id="voice-stage-reference">none loaded</strong>
+                  </div>
+                  <div class="voice-stage-stat voice-stage-stat-detail">
+                    <span>Target Voice</span>
+                    <strong id="voice-stage-target-voice">not derived yet</strong>
+                  </div>
+                  <div class="voice-stage-stat voice-stage-stat-detail">
+                    <span>Phrase Map</span>
+                    <strong id="voice-stage-forecast">no phrase map</strong>
+                  </div>
+                  <div class="voice-stage-stat voice-stage-stat-detail">
+                    <span>Drill</span>
+                    <strong id="voice-stage-drill">none selected</strong>
+                  </div>
+                  <div class="voice-stage-stat voice-stage-stat-detail">
+                    <span>Path Match</span>
+                    <strong id="voice-stage-match">not scored yet</strong>
+                  </div>
+                  <div class="voice-stage-stat voice-stage-stat-detail">
+                    <span>Lane Match</span>
+                    <strong id="voice-stage-lane">not scored yet</strong>
+                  </div>
+                  <div class="voice-stage-stat voice-stage-stat-detail">
+                    <span>Contour</span>
+                    <strong id="voice-stage-contour">not scored yet</strong>
+                  </div>
+                  <div class="voice-stage-stat">
+                    <span>Zone Hold</span>
+                    <strong id="voice-stage-zone">not scored yet</strong>
+                  </div>
+                </div>
+              </section>
+
+              <section id="voice-review-panel" class="voice-review-panel hidden">
+                <div class="voice-review-header">
+                  <span class="voice-chip-label">Review</span>
+                  <h3>This session</h3>
+                </div>
+                <!-- Surfacing wave: due-for-review line, shown only when something is due. -->
+                <p id="voice-review-due" class="voice-review-due hidden" role="status" aria-live="polite"></p>
+                <p id="voice-review-summary">Finish a take to see your session summary here.</p>
+                <div id="voice-review-list" class="voice-review-list">
+                  <div class="voice-phrase-empty">Finish a take to see your session takes here.</div>
+                </div>
+                <!-- Post-take reflection (declutter 2026-07-19): the five
+                     self-report selects moved here from the pre-take script pad.
+                     Same ids and bindings; ratings still attach to the next
+                     completed take. -->
+                <div class="voice-self-report-panel" aria-label="Optional take reflection">
+                  <span class="voice-script-performance-label">How it felt</span>
+                  <div class="voice-self-report-grid">
+                    <label class="voice-self-report-control">
+                      <span>Effort</span>
+                      <select id="voice-self-report-effort">
+                        <option value="">Unset</option>
+                        <option value="1">1 very easy</option>
+                        <option value="2">2 easy</option>
+                        <option value="3">3 moderate</option>
+                        <option value="4">4 hard</option>
+                        <option value="5">5 max</option>
+                      </select>
+                    </label>
+                    <label class="voice-self-report-control">
+                      <span>Strain</span>
+                      <select id="voice-self-report-strain">
+                        <option value="">Unset</option>
+                        <option value="1">1 none</option>
+                        <option value="2">2 slight</option>
+                        <option value="3">3 noticeable</option>
+                        <option value="4">4 high</option>
+                        <option value="5">5 stop</option>
+                      </select>
+                    </label>
+                    <label class="voice-self-report-control">
+                      <span>Difficulty</span>
+                      <select id="voice-self-report-difficulty">
+                        <option value="">Unset</option>
+                        <option value="1">1 too easy</option>
+                        <option value="2">2 easy</option>
+                        <option value="3">3 right</option>
+                        <option value="4">4 hard</option>
+                        <option value="5">5 too hard</option>
+                      </select>
+                    </label>
+                    <label class="voice-self-report-control">
+                      <span>Fatigue</span>
+                      <select id="voice-self-report-fatigue">
+                        <option value="">Unset</option>
+                        <option value="1">1 none</option>
+                        <option value="2">2 slight</option>
+                        <option value="3">3 noticeable</option>
+                        <option value="4">4 high</option>
+                        <option value="5">5 stop</option>
+                      </select>
+                    </label>
+                    <label class="voice-self-report-control">
+                      <span>Confidence</span>
+                      <select id="voice-self-report-confidence">
+                        <option value="">Unset</option>
+                        <option value="1">1 unsure</option>
+                        <option value="2">2 low</option>
+                        <option value="3">3 mixed</option>
+                        <option value="4">4 good</option>
+                        <option value="5">5 strong</option>
+                      </select>
+                    </label>
+                  </div>
+                  <p id="voice-self-report-copy" class="voice-reference-help">Optional. Set ratings for the next completed take; blank fields are not logged.</p>
+                </div>
+                <p id="voice-review-focus">Your practice focus and next drills will appear here after a scored take.</p>
+              </section>
+            </div>
+
+            <aside class="voice-coach-rail">
+              <div class="voice-coach-rail-header">
+                <div>
+                  <span class="voice-chip-label">Coach</span>
+                  <h3>Coach (optional)</h3>
+                </div>
+                <!-- Ambient session scope (abandon-trigger fix 6): a calm tier
+                     indicator — a control, never a startup prompt. Revealed and
+                     driven by session-scope.ts; stays hidden without it. -->
+                <button type="button" id="voice-session-scope" class="voice-session-scope hidden">Speaking freely</button>
+                <div class="voice-inline-actions voice-coach-runtime-controls">
+                  <button id="voice-coach-live-toggle" class="voice-btn voice-btn-secondary" type="button">Hands-Free: Off</button>
+                  <button id="voice-coach-speech-toggle" class="voice-btn voice-btn-secondary" type="button">Speak: On</button>
+                  <button id="voice-coach-provider-toggle" class="voice-btn voice-btn-secondary" type="button">Voice: Browser</button>
+                  <button id="voice-coach-input-provider-toggle" class="voice-btn voice-btn-secondary" type="button">Input: Browser</button>
+                </div>
+              </div>
+
+              <div id="voice-coach-thread" class="voice-coach-thread">
+                <div class="voice-coach-empty">
+                  The teacher says hello once your target voice is set, and reads along from your first take.
+                </div>
+              </div>
+
+              <!-- Surfacing wave honesty lines: quiet, factual, never alarming. -->
+              <p id="voice-coach-fallback-note" class="voice-coach-honesty-note hidden" role="status" aria-live="polite">Coach is offline — basic guidance mode</p>
+              <p id="voice-speech-standin-note" class="voice-coach-honesty-note hidden" role="status" aria-live="polite">Tutor voice unavailable — the selected voice sample could not be used</p>
+
+              <!-- Lesson surface (v1.5): one-real-sentence debrief follow-up.
+                   Shown only when the greeting carries a pending debrief. Three
+                   quiet outcome buttons + an optional note; one tap logs it and
+                   the coach replies in the thread. Dismissing is fine — never
+                   re-prompts in-session. -->
+              <div id="voice-lesson-debrief" class="voice-lesson-debrief hidden" role="group" aria-label="Yesterday’s sentence debrief" aria-hidden="true">
+                <div class="voice-lesson-debrief-head">
+                  <p id="voice-lesson-debrief-prompt" class="voice-lesson-debrief-prompt"></p>
+                  <button id="voice-lesson-debrief-dismiss" class="voice-lesson-debrief-dismiss" type="button" aria-label="Dismiss the debrief">✕</button>
+                </div>
+                <div class="voice-lesson-debrief-actions">
+                  <button id="voice-lesson-debrief-well" class="voice-lesson-debrief-button" type="button">Said it — went well</button>
+                  <button id="voice-lesson-debrief-rough" class="voice-lesson-debrief-button" type="button">Said it — rough</button>
+                  <button id="voice-lesson-debrief-not" class="voice-lesson-debrief-button" type="button">Didn’t today</button>
+                </div>
+                <input type="text" id="voice-lesson-debrief-note" class="voice-lesson-debrief-note" maxlength="240" placeholder="A note, if you want (optional)" aria-label="An optional note about how it went">
+              </div>
+
+              <div class="voice-coach-quick-actions">
+                <button class="voice-pill" type="button" data-voice-coach-question="Why did that sound heavy?">Why heavy?</button>
+                <button class="voice-pill" type="button" data-voice-coach-question="Give me an easier line next.">Easier line</button>
+                <button class="voice-pill" type="button" data-voice-coach-question="Make the next line more playful.">More playful</button>
+              </div>
+
+              <!-- Lesson surface (Wave B): the three quick intents. Help and Break
+                   it down ride the SAME coach channel as the chat input (they carry
+                   data-voice-coach-question so the existing binding sends them);
+                   Listen back opens the replay overlay (controller-bound). -->
+              <div class="voice-lesson-intents" role="group" aria-label="Quick lesson actions">
+                <button id="voice-lesson-intent-help" class="voice-lesson-intent" type="button" data-voice-coach-question="Help me with this — what exactly should I do right now?">Help</button>
+                <button id="voice-lesson-intent-break" class="voice-lesson-intent" type="button" data-voice-coach-question="Break this task down into smaller steps I can do one at a time.">Break it down</button>
+                <button id="voice-lesson-intent-listen" class="voice-lesson-intent" type="button">Listen back</button>
+                <button id="voice-lesson-replay-offer" class="voice-lesson-replay-offer hidden" type="button" aria-hidden="true">Listen back together ●</button>
+              </div>
+
+              <!-- 2026-07-27 (owner's law): coach mode is SPOKEN — no typed
+                   input exists here. You talk to the tutor; the tap pills above
+                   are the only non-voice asks, and they send preset questions
+                   through the same spoken-turn lane. -->
+              <div class="voice-inline-actions">
+                <button id="voice-coach-voice-toggle" class="voice-btn voice-btn-primary" type="button">Talk to Coach</button>
+              </div>
+              <p id="voice-coach-copy" class="voice-reference-help">
+                Once a take ends, this rail will translate the metrics into drills, phrasing notes, and progress cues.
+              </p>
+            </aside>
+          </div>
+
+          <section class="voice-advanced-drawer">
+            <div id="voice-advanced-content" class="voice-advanced-content hidden">
+              <div class="voice-lab-grid">
+                <section class="voice-active-drill-card">
+                  <div class="voice-active-drill-header">
+                    <div>
+                      <span class="voice-chip-label">Active drill</span>
+                      <h3 id="voice-active-drill-title">Practice cockpit</h3>
+                      <p id="voice-active-drill-copy">
+                        One coached loop: the tutor speaks, practice captures the pass, then the tutor reviews the result.
+                      </p>
+                    </div>
+                    <span class="voice-panel-badge" id="voice-active-drill-state">Standby</span>
+                  </div>
+
+                  <div class="voice-active-drill-summary">
+                    <p id="voice-cue-sheet-copy" class="voice-reference-help">
+                      Select a drill or project a phrase map to get mouth-shape, airflow, placement, and expression notes under the words.
+                    </p>
+                  </div>
+
+                  <div class="voice-active-results">
+                    <div class="voice-active-result-card">
+                      <span class="voice-chip-label">Latest read</span>
+                      <p>Start a practice take to generate instant graph feedback and post-take notes.</p>
+                    </div>
+                    <div class="voice-active-result-card">
+                      <span class="voice-chip-label">Phrase match</span>
+                      <p id="voice-phrase-comparison-copy">Select a drill or project a phrase map to score phrase-shape matching after a take.</p>
+                    </div>
+                  </div>
+
+                  <!-- Lesson surface (v1.5): time-lapse mirror pin offer. Shown
+                       only when a take payload carries pinSuggestion. An offer —
+                       ignoring it costs nothing and it never repeats. -->
+                  <div id="voice-lesson-pin-offer" class="voice-lesson-pin-offer hidden" role="group" aria-label="Keep this take" aria-hidden="true">
+                    <span id="voice-lesson-pin-offer-text" class="voice-lesson-pin-offer-text">keep this one as this week’s marker</span>
+                    <button id="voice-lesson-pin-offer-button" class="voice-lesson-pin-offer-button" type="button" aria-label="Keep this take as this week’s marker">Keep it</button>
+                  </div>
+
+                  <div id="voice-phrase-quick-feedback" class="voice-phrase-feedback-list">
+                    <div class="voice-phrase-empty">Instant feedback will appear here after a scored take.</div>
+                  </div>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>Audio input</h3>
+                  <label class="voice-control">
+                    <span>Input device</span>
+                    <select id="voice-input-device">
+                      <option value="default">System default input</option>
+                    </select>
+                  </label>
+                  <div class="voice-input-diagnostics">
+                    <div class="voice-input-stat">
+                      <span>Current Source</span>
+                      <strong id="voice-input-selected">System default input</strong>
+                    </div>
+                    <div class="voice-input-stat">
+                      <span>Live Level</span>
+                      <strong id="voice-input-level">--</strong>
+                    </div>
+                    <div class="voice-input-stat">
+                      <span>Signal</span>
+                      <strong id="voice-input-signal">--</strong>
+                    </div>
+                    <div class="voice-input-stat">
+                      <span>Take Quality</span>
+                      <strong id="voice-input-reliability">--</strong>
+                    </div>
+                  </div>
+                  <p id="voice-input-copy" class="voice-reference-help">
+                    Grant mic access once to reveal the exact browser-visible device label for your interface.
+                  </p>
+                  <div class="voice-inline-actions">
+                    <button id="voice-mic-check-rerun" class="voice-btn voice-btn-secondary" type="button">Run mic check</button>
+                  </div>
+                  <p id="voice-mic-check-last" class="voice-reference-help" aria-live="polite">No mic check for this input yet.</p>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>Input runtime</h3>
+                  <div class="voice-input-diagnostics">
+                    <div class="voice-input-stat">
+                      <span>Status</span>
+                      <strong id="voice-input-runtime-status">Idle</strong>
+                    </div>
+                    <div class="voice-input-stat">
+                      <span>Provider Path</span>
+                      <strong id="voice-input-runtime-provider">Browser</strong>
+                    </div>
+                    <div class="voice-input-stat">
+                      <span>Last Latency</span>
+                      <strong id="voice-input-runtime-latency">--</strong>
+                    </div>
+                    <div class="voice-input-stat">
+                      <span>Turn Counters</span>
+                      <strong id="voice-input-runtime-counts">0 ok • 0 no speech</strong>
+                    </div>
+                  </div>
+                  <div id="voice-input-runtime-pills" class="voice-active-line-cues"></div>
+                  <p id="voice-input-runtime-copy" class="voice-reference-help">
+                    No spoken coach turn has been recorded through the runtime yet.
+                  </p>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>VAD tuning</h3>
+                  <label class="voice-text-control">
+                    <span>Speech threshold (RMS)</span>
+                    <input type="number" id="voice-vad-rms-threshold" min="0.003" max="0.08" step="0.001" value="0.018">
+                  </label>
+                  <label class="voice-text-control">
+                    <span>Silence hold (ms)</span>
+                    <input type="number" id="voice-vad-silence-hold-ms" min="4500" max="8000" step="100" value="4500">
+                  </label>
+                  <label class="voice-text-control">
+                    <span>No speech timeout (ms)</span>
+                    <input type="number" id="voice-vad-no-speech-timeout-ms" min="2000" max="20000" step="250" value="12000">
+                  </label>
+                  <label class="voice-text-control">
+                    <span>Min speech (ms)</span>
+                    <input type="number" id="voice-vad-min-speech-ms" min="150" max="2000" step="50" value="350">
+                  </label>
+                  <label class="voice-control">
+                    <span>
+                      <input type="checkbox" id="voice-audio-prefer-worklet" checked="">
+                      Prefer AudioWorklet (when available)
+                    </span>
+                  </label>
+                  <p class="voice-reference-help">
+                    Higher thresholds reduce false positives but may miss softer speech. Increase silence hold to wait longer after you stop.
+                  </p>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>Saved voice targets</h3>
+                  <div class="voice-inline-actions">
+                    <button id="voice-save-reference-preset" class="voice-btn voice-btn-secondary" type="button">Save Current Reference As New</button>
+                    <button id="voice-remove-reference" class="voice-btn voice-btn-secondary" type="button">Remove Active Reference</button>
+                    <button id="voice-seed-custom-preset" class="voice-btn voice-btn-secondary" type="button">Seed Workspace</button>
+                  </div>
+                  <div id="voice-custom-preset-list" class="voice-drill-list">
+                    <div class="voice-drill-empty">No saved voice targets yet. Save Current Reference As New or Save Handmade Preset to create one.</div>
+                  </div>
+                  <p id="voice-custom-preset-library-status" class="voice-reference-help" aria-live="polite">
+                    Voice target library ready when the trainer is online.
+                  </p>
+                  <p class="voice-reference-help">
+                    Reference saves create a new preset by default. Use Rename on a saved reference first if you mean to update that library entry. Archive keeps a preset recoverable; Delete permanently removes it.
+                  </p>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>Custom target workspace</h3>
+                  <p id="voice-custom-preset-workspace-status" class="voice-reference-help" aria-live="polite">
+                    Workspace mode: blank handmade draft. Load a reference or seed from the active target to start editing.
+                  </p>
+                  <label class="voice-text-control">
+                    <span>Preset name</span>
+                    <input type="text" id="voice-custom-preset-name" placeholder="e.g. Warm Bright Forward">
+                  </label>
+                  <label class="voice-text-control">
+                    <span>Base preset</span>
+                    <select id="voice-custom-preset-base">
+                      <optgroup label="Feminine">
+                        <option value="cute-feminine">Cute Feminine</option>
+                        <option value="everyday-feminine">Everyday Feminine</option>
+                        <option value="bright-playful">Bright Playful</option>
+                        <option value="australian-bright-feminine">Australian Bright Feminine</option>
+                        <option value="soft-feminine">Soft Feminine</option>
+                      </optgroup>
+                    </select>
+                  </label>
+                  <div class="voice-input-diagnostics">
+                    <label class="voice-text-control">
+                      <span>Pitch floor (Hz)</span>
+                      <input type="number" id="voice-custom-preset-pitch-floor" min="80" max="360" step="1" placeholder="170">
+                    </label>
+                    <label class="voice-text-control">
+                      <span>Pitch ceiling (Hz)</span>
+                      <input type="number" id="voice-custom-preset-pitch-ceiling" min="100" max="400" step="1" placeholder="245">
+                    </label>
+                    <label class="voice-text-control">
+                      <span>Forward tone floor</span>
+                      <input type="number" id="voice-custom-preset-resonance-floor" min="0" max="1" step="0.01" placeholder="0.55">
+                    </label>
+                    <label class="voice-text-control">
+                      <span>Forward tone ceiling</span>
+                      <input type="number" id="voice-custom-preset-resonance-ceiling" min="0" max="1" step="0.01" placeholder="0.82">
+                    </label>
+                    <label class="voice-text-control">
+                      <span>Weight floor</span>
+                      <input type="number" id="voice-custom-preset-weight-floor" min="0" max="1" step="0.01" placeholder="0.18">
+                    </label>
+                    <label class="voice-text-control">
+                      <span>Weight ceiling</span>
+                      <input type="number" id="voice-custom-preset-weight-ceiling" min="0" max="1" step="0.01" placeholder="0.42">
+                    </label>
+                  </div>
+                  <label class="voice-text-control">
+                    <span>Style prompt</span>
+                    <input type="text" id="voice-custom-preset-style-prompt" placeholder="sweet, bright, easy, compact">
+                  </label>
+                  <label class="voice-text-control">
+                    <span>Notes</span>
+                    <textarea id="voice-custom-preset-notes" rows="4" placeholder="Short notes for the tutor and planner"></textarea>
+                  </label>
+                  <div class="voice-inline-actions">
+                    <button id="voice-save-handmade-preset" class="voice-btn voice-btn-primary" type="button">Save Handmade Preset</button>
+                  </div>
+                  <p class="voice-reference-help">
+                    Reset / Seed Workspace exits preset edit mode and copies the active target into this handmade editor.
+                  </p>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>Target voice profile</h3>
+                  <p id="voice-target-profile-copy">
+                    Load a longer voice sample and the trainer will distill a reusable target profile from it.
+                  </p>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>Tutor voice tuning</h3>
+                  <label class="voice-control">
+                    <span>
+                      <input type="checkbox" id="voice-conditioning-use-profile-style">
+                      Reuse target profile style when available
+                    </span>
+                  </label>
+                  <label class="voice-text-control">
+                    <span>Style instruction</span>
+                    <input type="text" id="voice-conditioning-style" placeholder="e.g. warm, bright, playful tutor delivery">
+                  </label>
+                  <label class="voice-text-control">
+                    <span>Prompt transcript</span>
+                    <input type="text" id="voice-conditioning-prompt-text" placeholder="Transcript for the prompt sample">
+                  </label>
+                  <label class="voice-text-control">
+                    <span>Prompt audio sample</span>
+                    <input type="file" id="voice-conditioning-prompt-file" accept=".wav,.mp3,.m4a,.ogg,.flac,.webm,audio/*">
+                  </label>
+                  <label class="voice-text-control">
+                    <span>Reference audio sample</span>
+                    <input type="file" id="voice-conditioning-reference-file" accept=".wav,.mp3,.m4a,.ogg,.flac,.webm,audio/*">
+                  </label>
+                  <div class="voice-inline-actions">
+                    <button id="voice-conditioning-save" class="voice-btn voice-btn-secondary" type="button">Save Tuning</button>
+                    <button id="voice-conditioning-prompt-upload" class="voice-btn voice-btn-secondary" type="button">Prepare Prompt</button>
+                    <button id="voice-conditioning-reference-upload" class="voice-btn voice-btn-secondary" type="button">Prepare Reference</button>
+                  </div>
+                  <p id="voice-conditioning-status" class="voice-reference-help">
+                    Tutor voice is currently zero-shot. Add style text or prepare a sample to steer VoxCPM.
+                  </p>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>Guided drills</h3>
+                  <p id="voice-drill-copy">
+                    Curated drills load per preset, then adapt to your latest take, review queue, and reference work.
+                  </p>
+                  <div id="voice-drill-list" class="voice-drill-list">
+                    <div class="voice-drill-empty">Guided drills will appear here once the trainer syncs.</div>
+                  </div>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>Phrase projection</h3>
+                  <label class="voice-text-control">
+                    <span>Phrase</span>
+                    <input type="text" id="voice-forecast-phrase" placeholder="e.g. could you say that again?">
+                  </label>
+                  <div class="voice-inline-actions">
+                    <button id="voice-forecast-generate" class="voice-btn voice-btn-primary">Project Phrase Map</button>
+                  </div>
+                  <p id="voice-forecast-copy" class="voice-reference-help">
+                    Load a target reference first, then project a phrase map for shadowing.
+                  </p>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>Sound spelling detail</h3>
+                  <div id="voice-cue-sheet-meta" class="voice-cue-sheet-meta"></div>
+                  <div id="voice-cue-sheet-line" class="voice-cue-sheet-line">
+                    <div class="voice-phrase-empty">No coached phrase loaded yet.</div>
+                  </div>
+                  <div id="voice-cue-sheet-tokens" class="voice-cue-sheet-tokens">
+                    <div class="voice-phrase-empty">Word-by-word mouth notes will appear here once a drill or phrase map is active.</div>
+                  </div>
+                </section>
+
+                <section class="voice-practice-card">
+                  <h3>Phrase checkpoint detail</h3>
+                  <div id="voice-phrase-checkpoints" class="voice-phrase-checkpoints">
+                    <div class="voice-phrase-empty">Checkpoint feedback will appear here once a phrase map has been scored.</div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </section>
+
+          <!-- Lesson surface (Wave B): replay overlay "listen back together".
+               Opened by the coach (replayDirective), the R key, or "Listen back".
+               The attempt audio plays while the compass re-travels the recorded
+               trail and the card re-marks in sync. Esc / click-outside closes. -->
+          <div id="voice-lesson-replay-overlay" class="voice-lesson-replay-overlay hidden" role="dialog" aria-modal="true" aria-label="Listen back together" aria-hidden="true">
+            <div class="voice-lesson-replay-dialog" role="document">
+              <div class="voice-lesson-replay-header">
+                <span class="voice-chip-label">Listen back together</span>
+                <button id="voice-lesson-replay-close" class="voice-lesson-replay-close" type="button" aria-label="Close replay">✕</button>
+              </div>
+              <p id="voice-lesson-replay-status" class="voice-lesson-replay-status" aria-live="polite">Listening back together…</p>
+              <div id="voice-lesson-replay-card-strip" class="voice-lesson-card-strip voice-lesson-replay-card-strip" aria-hidden="true"></div>
+              <div class="voice-lesson-replay-compass" role="img" aria-label="Recorded take replaying on the voice compass">
+                <svg class="voice-lesson-replay-trail hidden" id="voice-lesson-replay-trail" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                  <polyline id="voice-lesson-replay-trail-line"></polyline>
+                </svg>
+                <div class="voice-graph-dot voice-lesson-replay-dot hidden" id="voice-lesson-replay-dot"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Lesson surface (v1.5): the time-lapse mirror panel — the person's
+               own recorded arc. A takeover surface (its id is in the lesson
+               keyboard guard list). Lists pinned milestones on a time axis;
+               plays then-vs-now sequentially through the replay machinery (its
+               own compass; muted "then" trail vs standard "now" trail). Esc /
+               click-outside closes. -->
+          <div id="voice-lesson-mirror-overlay" class="voice-lesson-mirror-overlay hidden" role="dialog" aria-modal="true" aria-label="Your arc — pinned takes over time" aria-hidden="true">
+            <div class="voice-lesson-mirror-dialog" role="document">
+              <div class="voice-lesson-mirror-header-row">
+                <span class="voice-chip-label">Your arc</span>
+                <button id="voice-lesson-mirror-close" class="voice-lesson-mirror-close" type="button" aria-label="Close your arc">✕</button>
+              </div>
+              <p id="voice-lesson-mirror-honest" class="voice-lesson-mirror-honest">Same phrase not required — listen for the center of the voice.</p>
+              <p id="voice-lesson-mirror-empty" class="voice-lesson-mirror-empty hidden">When a take is worth keeping, you can pin it here — one a week is plenty.</p>
+              <div id="voice-lesson-mirror-list" class="voice-lesson-mirror-list" role="list" aria-label="Pinned takes"></div>
+              <div class="voice-lesson-mirror-playback">
+                <p id="voice-lesson-mirror-header" class="voice-lesson-mirror-then-now" aria-live="polite"></p>
+                <div class="voice-lesson-mirror-compass" id="voice-lesson-mirror-compass" role="img" aria-label="Pinned takes replaying on the voice compass">
+                  <svg class="voice-lesson-replay-trail hidden" id="voice-lesson-mirror-trail" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                    <polyline id="voice-lesson-mirror-trail-line"></polyline>
+                  </svg>
+                  <div class="voice-graph-dot voice-lesson-replay-dot hidden" id="voice-lesson-mirror-dot"></div>
+                </div>
+                <p id="voice-lesson-mirror-replay-status" class="voice-lesson-mirror-replay-status" aria-live="polite"></p>
+                <div class="voice-lesson-mirror-controls">
+                  <button id="voice-lesson-mirror-play" class="voice-lesson-mirror-play" type="button" aria-label="Play then and now" disabled="">Play then → now</button>
+                  <span id="voice-lesson-mirror-status" class="voice-lesson-mirror-status" aria-live="polite"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>`;
+
+export function getVoiceTutorStandaloneTemplateHtml(): string {
+  return voiceTutorStandaloneTemplateHtml;
+}

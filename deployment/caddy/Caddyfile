@@ -1,0 +1,40 @@
+# SLOANE Voice Tutor standalone HTTPS/WSS reverse proxy.
+#
+# Replace voice.example.com and /opt/sloane/voice-tutor/dist before use.
+# The standalone gateway is expected on 127.0.0.1:3021.
+
+{
+	email admin@example.com
+}
+
+voice.example.com {
+	encode zstd gzip
+
+	@voiceStandaloneBackend {
+		path /health
+		path /voice/*
+		path /voice-trainer/*
+		path /knowledge/voice/*
+		path /task/*
+		path /session/*
+		path /sessions/*
+		path /models
+		path /models/*
+		path /agents/*
+		path /compatibility-presets
+		path /deeptutor/voice/*
+	}
+
+	reverse_proxy @voiceStandaloneBackend 127.0.0.1:3021 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	root * /opt/sloane/voice-tutor/dist
+	header /voice-tutor-sw.js Cache-Control "no-cache"
+	header /voice-tutor.webmanifest Cache-Control "no-cache"
+	try_files {path} /voice-tutor.html
+	file_server
+}

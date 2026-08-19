@@ -1,0 +1,605 @@
+'use strict';
+
+/**
+ * DirectReply — Phase 0 of deterministic-first rendering (2026-07-28).
+ *
+ * Engine-authored replies for structured turn types, migrating the covered
+ * intents off the LLM renderer. Phase 0 runs SHADOW: the wiring computes these
+ * replies and logs them side-by-side (coach_direct_reply_shadow) while the LLM
+ * still serves the learner. Nothing user-facing changes while
+ * voiceDirectReplyMode is 'off' or 'shadow'.
+ *
+ * LAWS every string here obeys (all proven by the property test — every
+ * composed reply crosses sanitizeCoachReply and must come back UNCHANGED):
+ *   - spec §7 beginner language: no "the line", no axis jargon, plain words
+ *     only; the practice sentence is quoted where natural (cueWithLine).
+ *   - The spoken clamp: <= 2 sentences, <= 45 spoken words.
+ *   - The cue laws: a cue names a body action; no imagery, no placement
+ *     fiction, no homework, no equipment, no session-control wording.
+ *
+ * VARIATION (the repetition defense — the complaint that started this work was
+ * repetitive phrasing, and naive fixed strings would be worse):
+ *   1. Take-specific interpolation: the reason carries live numbers and the
+ *      comparison clause reads the last two takes out of the history block, so
+ *      two consecutive takes cannot produce the same sentence unless the
+ *      numbers repeat.
+ *   2. Rotation pools with recency exclusion: 3+ phrasings per intent/axis; a
+ *      template whose text appeared in the last 3 coach-thread entries is
+ *      skipped (same precedent as section-loop's pickSectionCue usedCueIds).
+ *   3. Trend-conditioned openings: acknowledge_win and COACH openings key off
+ *      signal.history.trend (improving/flat/fatiguing/uncertain) — never one
+ *      flat "That was good".
+ *
+ * HYBRID ESCALATION: a turn whose utterance is question-shaped or off-script
+ * (not the practice line) returns null and stays on the LLM, even on covered
+ * intents. continue_conversation, repair_capture, reflection_summary, and any
+ * unknown intent or focus axis return null too — never a wrong-axis cue,
+ * never silence-as-an-answer (null = the LLM serves).
+ */
+
+const {
+  quotePracticeLine,
+  resolvePracticeLineAnswer,
+  CUE_VOCABULARY_RULES,
+  CONTRAINDICATED_RULES,
+  BANNED_VOCAB_RULES,
+  BEGINNER_JARGON_RULES,
+} = require('./sanitizer');
+
+/**
+ * Is this text safe to speak to a beginner verbatim? The check a composer runs
+ * BEFORE interpolating any string it did not author (a persisted lesson title
+ * is learner data, not trusted wording — 'Resonance Toward the Target' and
+ * 'Ease Vocal Weight' are real titles). Uses the sanitizer's own rule tables
+ * so the check can never drift from the runtime contract; the /g-flagged
+ * banned-vocab patterns are lastIndex-reset per test.
+ */
+function isLearnerFacingClean(text) {
+  const value = String(text || '');
+  if (!value.trim()) return false;
+  const tables = [
+    BEGINNER_JARGON_RULES,
+    CUE_VOCABULARY_RULES,
+    CONTRAINDICATED_RULES,
+    BANNED_VOCAB_RULES,
+  ];
+  return !tables.some((rules) => rules.some((rule) => {
+    rule.pattern.lastIndex = 0;
+    return rule.pattern.test(value);
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Small shared helpers
+// ---------------------------------------------------------------------------
+
+function normalizeWords(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s']/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function resolveIntent(signal) {
+  return signal?.coachingDecision?.intent
+    || signal?.coachMove?.intent
+    || null;
+}
+
+function resolveCoachingAction(signal) {
+  return String(signal?.policy?.coachingAction || '').trim().toLowerCase();
+}
+
+/**
+ * The app's own post-take route feeds this FIXED engine string as the turn
+ * message (voice-standalone-runtime.js startAsyncVoiceCoachTask) — it is NOT
+ * the learner speaking, so it must never escalate. Referenced by name in
+ * section-loop.js's take-transcript law for the same reason.
+ */
+const ENGINE_POST_TAKE_MESSAGE = 'Give me one concise post-take coaching note for the latest voice attempt.';
+
+/**
+ * Hybrid escalation: is this utterance a question or otherwise off-script?
+ * Composed from existing utilities — the meta-question responder covers the
+ * line-question subset (it answers upstream anyway); the practice-line
+ * similarity check keeps a genuine take ON the composer even when it is
+ * phrased as a question (the line library is full of question-form lines).
+ *
+ * 2026-07-28 review fix: off-script STATEMENTS escalate too. A learner who
+ * SAYS something that is not the practice line ("my throat hurts", "i dont
+ * understand") must be answered by the model, not composed over with a pitch
+ * cue — composing praise over a pain report is the worse failure; a bad-ASR
+ * take merely costs one LLM turn (the safe direction).
+ */
+function isOffScriptUtterance(signal) {
+  const utterance = String(signal?.userUtterance || '').trim();
+  if (!utterance) return false;
+  if (utterance === ENGINE_POST_TAKE_MESSAGE) return false;
+  if (resolvePracticeLineAnswer(signal)) return true;
+
+  const line = String(signal?.practiceLine || '').trim();
+  if (line) {
+    const lineWords = new Set(normalizeWords(line));
+    const saidWords = normalizeWords(utterance);
+    if (lineWords.size > 0 && saidWords.length > 0) {
+      const overlap = saidWords.filter((word) => lineWords.has(word)).length;
+      // >=60% word overlap with the practice line: this IS the take, not a
+      // statement about it — a question-form drill line must not escalate.
+      if (overlap / Math.max(1, saidWords.length) >= 0.6) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Last-two-takes comparison from the code-owned history summary
+ * ("t1: 170Hz/60% · t2: 168Hz/55%"). Returns e.g. 'last take 158 Hz, this one
+ * 165' or '' when the numbers are not there to read.
+ */
+function buildComparisonClause(signal) {
+  const summary = String(signal?.history?.last3TakeSummary || '');
+  const readings = [...summary.matchAll(/(\d+)\s*Hz/g)].map((match) => Number(match[1]));
+  if (readings.length < 2) return '';
+  const previous = readings[readings.length - 2];
+  const latest = readings[readings.length - 1];
+  if (!Number.isFinite(previous) || !Number.isFinite(latest)) return '';
+  return `last take ${previous} Hz, this one ${latest}`;
+}
+
+function resolveTrend(signal) {
+  const trend = String(signal?.history?.trend || '').trim().toLowerCase();
+  return ['improving', 'flat', 'fatiguing'].includes(trend) ? trend : 'uncertain';
+}
+
+/**
+ * Rotation pick with recency exclusion. A template whose text appeared in the
+ * last 3 coach-thread replies is skipped — CONTAINED-in comparison, because
+ * wrapping templates (openers, pivots) are fragments of the reply they
+ * produced, while full-text pools match exactly either way. When the whole
+ * pool is excluded the exclusion window SHRINKS (last 3 -> last 2 -> first
+ * entry) instead of pinning pool[0]: with a 4-entry pool and a window of 3 a
+ * reply can never repeat back-to-back even with zero numeric interpolation
+ * (measured by the shadow eval's repetition gate).
+ */
+function pickTemplate(pool, recentReplies) {
+  if (!Array.isArray(pool) || pool.length === 0) return null;
+  const recent = (Array.isArray(recentReplies) ? recentReplies : [])
+    .map((text) => String(text || '').trim())
+    .filter(Boolean);
+  for (const windowSize of [3, 2]) {
+    const window = recent.slice(-windowSize);
+    const pick = pool.find((template) => !window.some((served) => served.includes(template.text)));
+    if (pick) return pick;
+  }
+  return pool[0];
+}
+
+function recentAssistantReplies(context) {
+  const history = Array.isArray(context?.conversationHistory) ? context.conversationHistory : [];
+  return history
+    .filter((entry) => entry && entry.role !== 'user' && typeof entry.content === 'string')
+    .map((entry) => entry.content)
+    .slice(-3);
+}
+
+// ---------------------------------------------------------------------------
+// Template pools (3+ per intent/axis — the recency exclusion needs room to
+// rotate, and four leaves room to retire one without dropping below three;
+// same sizing discipline as SECTION_CUES).
+// ---------------------------------------------------------------------------
+
+const COACH_OPENERS = {
+  improving: [
+    { id: 'coach-open-imp-a', text: 'That moved the right way' },
+    { id: 'coach-open-imp-b', text: 'Good movement there' },
+    { id: 'coach-open-imp-c', text: 'That is the direction' },
+  ],
+  flat: [
+    { id: 'coach-open-flat-a', text: 'Steady, but not there yet' },
+    { id: 'coach-open-flat-b', text: 'Same place as last take' },
+    { id: 'coach-open-flat-c', text: 'Holding even, still short of it' },
+  ],
+  fatiguing: [
+    { id: 'coach-open-fat-a', text: 'That slipped a little' },
+    { id: 'coach-open-fat-b', text: 'A step back this take' },
+    { id: 'coach-open-fat-c', text: 'That one cost more than the last' },
+  ],
+  uncertain: [
+    { id: 'coach-open-unc-a', text: 'One small thing now' },
+    { id: 'coach-open-unc-b', text: 'Next take, one change' },
+    { id: 'coach-open-unc-c', text: 'Keep it simple here' },
+  ],
+};
+
+const ADAPT_PIVOTS = [
+  { id: 'adapt-pivot-a', text: 'That angle is not landing — try this instead' },
+  { id: 'adapt-pivot-b', text: 'Different approach, same target' },
+  { id: 'adapt-pivot-c', text: 'Let us come at it another way' },
+];
+
+const GENTLE_OPENERS = [
+  { id: 'gentle-open-a', text: 'Nice and easy' },
+  { id: 'gentle-open-b', text: 'Gently now' },
+  { id: 'gentle-open-c', text: 'Soft and slow' },
+];
+
+const WIN_OPENERS = {
+  improving: [
+    { id: 'win-imp-a', text: 'That landed better than the last one' },
+    { id: 'win-imp-b', text: 'Better again — the work is showing' },
+    { id: 'win-imp-c', text: 'Another step the right way' },
+  ],
+  flat: [
+    { id: 'win-flat-a', text: 'Steady — that matched your best' },
+    { id: 'win-flat-b', text: 'Consistent — that is a skill too' },
+    { id: 'win-flat-c', text: 'Same good shape as the last take' },
+  ],
+  fatiguing: [
+    { id: 'win-fat-a', text: 'Good take — and the next one gets to be easier' },
+    { id: 'win-fat-b', text: 'That worked, and it should cost less next time' },
+    { id: 'win-fat-c', text: 'Well done — keep the effort low from here' },
+  ],
+  uncertain: [
+    { id: 'win-unc-a', text: 'That landed' },
+    { id: 'win-unc-b', text: 'That worked' },
+    { id: 'win-unc-c', text: 'Nicely done' },
+  ],
+};
+
+const WIN_NEXT_STEPS = [
+  { id: 'win-next-a', text: 'Say it again with that same mouth shape' },
+  { id: 'win-next-b', text: 'Say it again with the same loose jaw' },
+  { id: 'win-next-c', text: 'Say it again, same easy start on the first word' },
+  { id: 'win-next-d', text: 'Say it again with the jaw just as loose' },
+];
+
+// ---------------------------------------------------------------------------
+// NAMING WHAT WORKED (2026-07-30). The four WIN_NEXT_STEPS above are picked for
+// FRESHNESS and know nothing about the axis, so a win told her THAT it worked
+// and never WHAT worked — there was no sentence she could carry into tomorrow.
+// With the previous turn's cue carried on the signal (signal.previousCue) the
+// win line can name the action she was actually performing.
+//
+// TWO LAWS GOVERN EVERY STRING BELOW.
+//
+//   1. CO-OCCURRENCE, NEVER CAUSATION. We do not know the cue caused the
+//      improvement — she may simply have warmed up, and at one attempt nothing
+//      can distinguish the two. "You were starting each word softly" is true.
+//      "Starting each word softly did it" is a claim we cannot support, and this
+//      product's learners are quick to conclude they are doing it wrong, so a
+//      false causal claim is worse than a vague one. No frame here may contain
+//      because / so / that is why / it worked when.
+//
+//   2. A DERIVED CLAUSE, NEVER A TRUNCATED ONE. The drill instructions are full
+//      sentences with commas inside quoted sounds ('a tiny, gentle "uh"') and
+//      conjunctions that are not clause boundaries ("Let the jaw and tongue go
+//      loose"), so every mechanical first-clause split mangles at least one of
+//      them. The action clause is therefore written per cue ID — the ids are
+//      code-owned, finite and stable — and an id with no entry falls back to the
+//      stock WIN_NEXT_STEPS line rather than emitting something mangled. The
+//      anti-drift test walks recommendDrillForFocus over every focus axis and
+//      requires an entry for every id it can return.
+//
+// Each clause is a GERUND phrase that reads after "you were …", stays inside the
+// spoken register, and names a body part or a movement — the latter is not
+// decoration: the sanitizer's cue-shape law (PRODUCT LAW 5) drops a sentence
+// that claims something about the sound without naming the body, and the
+// core-loop repair replaces a coaching reply carrying no executable action at
+// all. Clauses are written at the FAMILY level (what the cue asks her to do)
+// rather than quoting the instruction, because the words she actually heard were
+// either an INSTRUCTION_VARIANT of the same cue or the model's own paraphrase.
+// ---------------------------------------------------------------------------
+
+const {
+  WIN_CUE_ACTIONS,
+  resolvePreviousCueAction,
+} = require('./previous-cue-actions');
+
+// The frames the named action is spoken in. Four, like every other pool, and
+// rotated through the same recency exclusion — a learner landing the same cue
+// three takes running must not hear one byte-identical sentence three times.
+// Each carries an imperative verb from the sanitizer's actionable-cue
+// vocabulary (keep / say / try / hold) so the composed reply is recognised as a
+// real instruction; "do that again" alone matches none of them and would be
+// replaced wholesale by the core-loop repair.
+const WIN_CUE_FRAMES = [
+  { id: 'win-cue-a', build: (action) => `You were ${action} — keep that going` },
+  { id: 'win-cue-b', build: (action) => `Say it again the same way — you were ${action}` },
+  { id: 'win-cue-c', build: (action) => `Try that again — you were ${action}` },
+  { id: 'win-cue-d', build: (action) => `Hold onto that — you were ${action}` },
+];
+
+const RESET_LINES = [
+  { id: 'reset-a', text: 'Switch to a very gentle hum or lip trill with no pushing.' },
+  { id: 'reset-b', text: 'Let the jaw hang loose and hum quietly, with no push at all.' },
+  { id: 'reset-c', text: 'Take the effort right down — a light hum, jaw loose and shoulders soft.' },
+  { id: 'reset-d', text: 'Ease everything off: one soft hum, nothing pressed, nothing pushed.' },
+];
+
+const BREATHER_LINES = [
+  { id: 'breather-a', text: 'I am listening — no voice work this turn. Whenever you are ready, we go gently.' },
+  { id: 'breather-b', text: 'That is alright. Nothing to do right now — I am here when you want to continue.' },
+  { id: 'breather-c', text: 'No drill this turn. Your pace — I am listening.' },
+  { id: 'breather-d', text: 'Nothing you have to do right now. I am here and listening.' },
+];
+
+const LESSON_TRANSITION_LINES = [
+  { id: 'lesson-a', text: 'Next up: {lesson} — one small thing at a time.' },
+  { id: 'lesson-b', text: 'Moving on to {lesson}. Same easy pace as before.' },
+  { id: 'lesson-c', text: 'Time for {lesson} — same gentle approach, one step at a time.' },
+  { id: 'lesson-d', text: 'Here is {lesson} — we take it one easy step at a time.' },
+];
+
+// ---------------------------------------------------------------------------
+// Drill instruction variants (2026-07-28 review fix). drillRegistry is ALWAYS
+// null in production, so signal-builder's per-axis default instruction is the
+// only body the COACH composer ever got — sentence 2 was byte-identical across
+// a same-focus sequence, which is the repetition complaint reborn. For Phase 0
+// each covered axis carries the engine default plus two alternates in the same
+// plain register, rotating through the same recency exclusion as every other
+// pool. PHASE-2 NOTE: these pools belong to the drill registry proper — when a
+// real registry ships, its per-axis instruction list should replace this table
+// rather than live beside it.
+// ---------------------------------------------------------------------------
+const INSTRUCTION_VARIANTS = {
+  pitch_floor: [
+    { id: 'drill-pf-v1', text: 'Start on a small "oo" with the lips rounded, then open the jaw into the words without letting the low notes slip back down.' },
+    { id: 'drill-pf-v2', text: 'Hum the first word softly on "mm", then say the rest with the jaw loose, keeping how low your voice dips where the hum put it.' },
+  ],
+  vocal_weight: [
+    { id: 'drill-vw-v1', text: 'Let the shoulders drop away from your ears, then say the words with the jaw loose and a gentle start on each one.' },
+    { id: 'drill-vw-v2', text: 'Soften the shoulders and the neck, then start each word a touch more softly than the last take.' },
+  ],
+  resonance_forward: [
+    { id: 'drill-rf-v1', text: 'Say the words with the tongue raised close behind the top teeth, and keep the jaw loose while it stays there.' },
+    { id: 'drill-rf-v2', text: 'Hum on "n" first and feel the buzz on your lips, then open into the words and keep that same feeling.' },
+  ],
+};
+
+// ---------------------------------------------------------------------------
+// Composers. Each returns { templateId, text } or null.
+// ---------------------------------------------------------------------------
+
+// The axes the composer may speak to (buildDecisionReason's family). Anything
+// else returns null — never a wrong-axis cue.
+const COMPOSABLE_FOCUS_AXES = new Set([
+  'pitch_floor',
+  'pitch_lower',
+  'pitch_stability',
+  'phrase_ending',
+  'vocal_weight',
+  'resonance_forward',
+  'tone_clarity',
+  'strain_reduction',
+  'speech_rate',
+]);
+
+/**
+ * Median pitch for the take, when measured. The direction-neutral live number
+ * for the lead sentence — deliberately NOT issues.plainEvidence, whose
+ * detector wording ("Lower pitch floor dipped to …") trips the cross-direction
+ * stripper and the beginner-jargon law ("pitch floor"). Live numbers come from
+ * the history comparison or this median; the raw reason never enters speech.
+ */
+function readMedianHz(signal) {
+  const value = Number(signal?.targetFit?.pitch?.medianHz);
+  return Number.isFinite(value) ? Math.round(value) : null;
+}
+
+function composeCoachCue(signal, context) {
+  const decision = signal?.coachingDecision || {};
+  const focus = String(decision.primaryFocus || '');
+  const drill = decision.recommendedDrill || {};
+  const instruction = typeof drill.instruction === 'string' ? drill.instruction.trim() : '';
+  // Unknown axis or no drill material: never a wrong-axis cue — the LLM serves.
+  if (!COMPOSABLE_FOCUS_AXES.has(focus) || !instruction) return null;
+  // Vocalise takes (hum/trill/siren/…) have no "say the sentence" framing; the
+  // per-kind honest-mirror text stays on the LLM this phase.
+  if (signal.takeKind && signal.takeKind !== 'phrase') return null;
+
+  const trend = resolveTrend(signal);
+  const openerPool = COACH_OPENERS[trend] || COACH_OPENERS.uncertain;
+  const opener = pickTemplate(openerPool, context.recentReplies);
+  const comparison = buildComparisonClause(signal);
+  const median = readMedianHz(signal);
+
+  // Sentence 1: trend-conditioned opener + live numbers (take-over-take
+  // comparison when history exists, else this take's median — the repetition
+  // defense, always direction-neutral).
+  const leadParts = [opener.text];
+  if (comparison) leadParts.push(comparison);
+  else if (median != null) leadParts.push(`this take's median was ${median} Hz`);
+  const lead = `${leadParts.join(' — ')}.`;
+  // Sentence 2: the drill body. The engine default rotates with the per-axis
+  // alternates through the same recency exclusion (2026-07-28 review fix —
+  // drillRegistry is always null in production, so without this the body was
+  // byte-identical across a same-focus sequence). The default may carry the
+  // practice line's last words spliced on by signal-builder; the alternates
+  // are complete cues on their own.
+  const instructionPool = [
+    { id: 'drill-default', text: instruction },
+    ...(INSTRUCTION_VARIANTS[focus] || []),
+  ];
+  const picked = pickTemplate(instructionPool, context.recentReplies);
+  const body = picked.text.replace(/[.!?]\s*$/, '');
+  return { templateId: `${opener.id}+${picked.id}`, text: `${lead} ${body}.` };
+}
+
+function composeAdaptCue(signal, context) {
+  const decision = signal?.coachingDecision || {};
+  const drill = decision.recommendedDrill || {};
+  const instruction = typeof drill.instruction === 'string' ? drill.instruction.trim() : '';
+  if (!instruction) return null;
+  if (signal.takeKind && signal.takeKind !== 'phrase') return null;
+  const pivot = pickTemplate(ADAPT_PIVOTS, context.recentReplies);
+  const comparison = buildComparisonClause(signal);
+  const lead = comparison ? `${pivot.text} (${comparison})` : pivot.text;
+  return { templateId: pivot.id, text: `${lead}. ${instruction.replace(/[.!?]\s*$/, '')}.` };
+}
+
+function composeGentleCue(signal, context) {
+  const decision = signal?.coachingDecision || {};
+  const drill = decision.recommendedDrill || {};
+  const instruction = typeof drill.instruction === 'string' ? drill.instruction.trim() : '';
+  if (signal.takeKind && signal.takeKind !== 'phrase') return null;
+  const opener = pickTemplate(GENTLE_OPENERS, context.recentReplies);
+  const rawBody = instruction
+    ? instruction.replace(/[.!?]\s*$/, '')
+    : 'let the jaw hang loose and start the next sound softly, keeping it level all the way through';
+  // The opener leads with an em-dash, so the body joins lowercase.
+  const body = rawBody.charAt(0).toLowerCase() + rawBody.slice(1);
+  return { templateId: opener.id, text: `${opener.text} — ${body}.` };
+}
+
+function composeAcknowledgeWin(signal, context) {
+  const trend = resolveTrend(signal);
+  const openerPool = WIN_OPENERS[trend] || WIN_OPENERS.uncertain;
+  const opener = pickTemplate(openerPool, context.recentReplies);
+
+  // 2026-07-30: when the previous turn's cue resolves to a written action
+  // clause, NAME what she did instead of reaching for a stock next step. The
+  // frames are interpolated BEFORE pickTemplate so the recency exclusion
+  // compares the sentence that was actually served — an uninterpolated frame
+  // never appears verbatim in a reply, so excluding on it would be a no-op and
+  // would pin frames[0] forever.
+  //
+  // The take-over-take Hz comparison is deliberately ABSENT from this branch.
+  // Per-attempt continuous values are unreliable at the individual level, and
+  // the number is the part of the old win line worth losing: "you were doing X"
+  // is something she can repeat tomorrow, "168 Hz, up from 154" is not. The
+  // stock branch below keeps it unchanged.
+  const action = resolvePreviousCueAction(signal);
+  if (action) {
+    const framed = WIN_CUE_FRAMES.map((frame) => ({ id: frame.id, text: frame.build(action) }));
+    const picked = pickTemplate(framed, context.recentReplies);
+    return {
+      templateId: `${opener.id}+${picked.id}`,
+      text: `${opener.text}. ${picked.text}.`,
+    };
+  }
+
+  const next = pickTemplate(WIN_NEXT_STEPS, context.recentReplies);
+  const comparison = buildComparisonClause(signal);
+  const lead = comparison ? `${opener.text} — ${comparison}` : opener.text;
+  // The next step quotes the practice sentence when one exists (the beginner
+  // must never have to ask what to say) and stays short when it does not.
+  const quote = quotePracticeLine(signal);
+  const tail = quote ? `${next.text}: "${quote}"` : next.text;
+  return { templateId: opener.id, text: `${lead}. ${tail}.` };
+}
+
+function composeStopAndReset(signal, context) {
+  const template = pickTemplate(RESET_LINES, context.recentReplies);
+  return { templateId: template.id, text: template.text };
+}
+
+function composeBreather(signal, context) {
+  const template = pickTemplate(BREATHER_LINES, context.recentReplies);
+  return { templateId: template.id, text: template.text };
+}
+
+function composeLessonTransition(signal, context) {
+  const lesson = typeof signal?.personalization?.currentLesson === 'string'
+    ? signal.personalization.currentLesson.trim()
+    : '';
+  // 2026-07-28 review fix: a persisted lesson title is learner data, not
+  // trusted wording — a jargon-bearing title ('Resonance Toward the Target')
+  // must not be interpolated into speech. Unclean title -> null, the LLM
+  // serves the transition.
+  if (!lesson || !isLearnerFacingClean(lesson)) return null;
+  const template = pickTemplate(LESSON_TRANSITION_LINES, context.recentReplies);
+  return { templateId: template.id, text: template.text.replace('{lesson}', lesson) };
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * Compose the engine-authored reply for a structured turn, or null when the
+ * LLM should serve. `context` may carry:
+ *   - conversationHistory: the coach thread ({role, content} entries) for
+ *     recency exclusion;
+ *   - witness: an object mutated with { composerId, intent, templateId } so
+ *     the shadow wiring can log coach_direct_reply_shadow without a second
+ *     return channel (the sanitizer's options.witness precedent).
+ */
+function buildDirectReply(signal, context = {}) {
+  if (!signal || typeof signal !== 'object') return null;
+  const intent = resolveIntent(signal);
+  const action = resolveCoachingAction(signal);
+
+  // Hybrid escalation: questions and off-script utterances stay on the LLM.
+  if (isOffScriptUtterance(signal)) return null;
+
+  const ctx = {
+    recentReplies: recentAssistantReplies(context),
+  };
+
+  let composed = null;
+  let composerId = null;
+  // Text-driven breather holds (decline/overwhelm) compose regardless of the
+  // resolved intent — the turn is a hold, not a conversation.
+  if (action === 'breather' && intent !== 'stop_and_reset') {
+    composerId = 'breather';
+    composed = composeBreather(signal, ctx);
+  } else if (intent === 'single_actionable_cue' && action === 'adapt') {
+    composerId = 'adapt';
+    composed = composeAdaptCue(signal, ctx);
+  } else if (intent === 'single_actionable_cue' && action === 'gentle') {
+    composerId = 'gentle';
+    composed = composeGentleCue(signal, ctx);
+  } else if (intent === 'single_actionable_cue') {
+    composerId = 'single_actionable_cue';
+    composed = composeCoachCue(signal, ctx);
+  } else if (intent === 'acknowledge_win') {
+    composerId = 'acknowledge_win';
+    composed = composeAcknowledgeWin(signal, ctx);
+  } else if (intent === 'stop_and_reset') {
+    composerId = 'stop_and_reset';
+    composed = composeStopAndReset(signal, ctx);
+  } else if (intent === 'lesson_transition') {
+    composerId = 'lesson_transition';
+    composed = composeLessonTransition(signal, ctx);
+  }
+
+  if (!composed || !composed.text) return null;
+  if (context.witness && typeof context.witness === 'object') {
+    context.witness.composerId = composerId;
+    context.witness.intent = intent;
+    context.witness.templateId = composed.templateId;
+  }
+  return composed.text;
+}
+
+/**
+ * Every INVARIANT full-sentence template the composer can speak, for the L3
+ * session-start TTS pre-warm (2026-07-29). Only whole sentences with stable
+ * text: openers/pivots are fragments, LESSON_TRANSITION interpolates the
+ * lesson name, and anything carrying take numbers is uncacheable — all of
+ * those stay out.
+ */
+function listInvariantTemplateTexts() {
+  return [
+    ...RESET_LINES,
+    ...BREATHER_LINES,
+    ...Object.values(INSTRUCTION_VARIANTS).flat(),
+  ].map((template) => template.text);
+}
+
+module.exports = {
+  buildDirectReply,
+  resolvePreviousCueAction,
+  // 2026-07-30 cue carry-forward: the id -> action-clause table, exported so the
+  // anti-drift test can walk recommendDrillForFocus over every focus axis and
+  // prove no code-owned cue id is missing a clause (a missing entry silently
+  // degrades that axis back to the stock win line, which is exactly the failure
+  // this change exists to remove).
+  WIN_CUE_ACTIONS,
+  // 2026-07-29 L3 (TTS latency): the invariant template sentences, for the
+  // session-start TTS pre-warm. Fragment pools (openers/pivots — never spoken
+  // as whole sentences, so no stable segment key) and interpolated templates
+  // (lesson names, take numbers) are deliberately excluded.
+  listInvariantTemplateTexts,
+};

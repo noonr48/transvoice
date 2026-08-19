@@ -1,0 +1,229 @@
+[
+  {
+    "name": "no-lesson-state",
+    "frontend": {
+      "deeptutorVoiceState": null,
+      "shouldRebuildLesson": false,
+      "hasActiveGuideSession": false,
+      "voiceDeepTutorLessonStatus": "idle",
+      "voiceSpeechRecognitionStatus": "idle",
+      "referenceMimicAction": null,
+      "canUseVoiceCoachVoiceInput": false,
+      "canUseVoiceCoachVoiceInputAfterRelease": false,
+      "latestCoachMessageId": null,
+      "lastSpokenCoachMessageId": null,
+      "snapshot": {}
+    },
+    "backend": {
+      "deeptutorVoiceState": null
+    },
+    "expected": {
+      "lessonMode": "none",
+      "guideStatus": "idle",
+      "runtimeOwner": "off",
+      "practiceIntent": "coach",
+      "hasActiveGuideSession": false,
+      "hasHistoricalLessonState": false
+    }
+  },
+  {
+    "name": "active-guided-listening",
+    "frontend": {
+      "deeptutorVoiceState": {
+        "guideSessionId": "guide-1",
+        "guideSessionStatus": "learning",
+        "runtimeState": "listening",
+        "lessonBoard": {
+          "title": "Bright endings"
+        }
+      },
+      "shouldRebuildLesson": false,
+      "hasActiveGuideSession": true,
+      "voiceDeepTutorLessonStatus": "idle",
+      "voiceSpeechRecognitionStatus": "idle",
+      "referenceMimicAction": null,
+      "canUseVoiceCoachVoiceInput": true,
+      "canUseVoiceCoachVoiceInputAfterRelease": true,
+      "latestCoachMessageId": null,
+      "lastSpokenCoachMessageId": null,
+      "snapshot": {}
+    },
+    "backend": {
+      "deeptutorVoiceState": {
+        "guideSessionId": "guide-1",
+        "guideSessionStatus": "learning",
+        "runtimeState": "listening",
+        "lessonBoard": {
+          "title": "Bright endings"
+        }
+      }
+    },
+    "expected": {
+      "lessonMode": "active",
+      "guideStatus": "learning",
+      "runtimeOwner": "listening",
+      "practiceIntent": "coach",
+      "hasActiveGuideSession": true,
+      "hasHistoricalLessonState": true
+    }
+  },
+  {
+    "name": "active-guided-practice",
+    "frontend": {
+      "deeptutorVoiceState": {
+        "guideSessionId": "guide-1",
+        "guideSessionStatus": "learning",
+        "runtimeState": "listening",
+        "lessonBoard": {
+          "mimicDirective": {
+            "action": "repeat"
+          }
+        }
+      },
+      "shouldRebuildLesson": false,
+      "hasActiveGuideSession": true,
+      "voiceDeepTutorLessonStatus": "idle",
+      "voiceSpeechRecognitionStatus": "idle",
+      "referenceMimicAction": "repeat",
+      "canUseVoiceCoachVoiceInput": true,
+      "canUseVoiceCoachVoiceInputAfterRelease": true,
+      "latestCoachMessageId": null,
+      "lastSpokenCoachMessageId": null,
+      "snapshot": {}
+    },
+    "backend": {
+      "deeptutorVoiceState": {
+        "guideSessionId": "guide-1",
+        "guideSessionStatus": "learning",
+        "runtimeState": "listening",
+        "lessonBoard": {
+          "mimicDirective": {
+            "action": "repeat"
+          }
+        },
+        "coachBrief": {
+          "immediateAction": "practice"
+        }
+      }
+    },
+    "expected": {
+      "lessonMode": "active",
+      "guideStatus": "learning",
+      "runtimeOwner": "listening",
+      "practiceIntent": "practice",
+      "hasActiveGuideSession": true,
+      "hasHistoricalLessonState": true
+    }
+  },
+  {
+    "name": "completed-history-planning",
+    "frontend": {
+      "deeptutorVoiceState": {
+        "guideSessionId": "guide-1",
+        "guideSessionStatus": "completed",
+        "runtimeState": "planning",
+        "lessonBoard": {
+          "title": "Bright endings"
+        },
+        "lastTutorMessage": "Stay bright on the ending."
+      },
+      "shouldRebuildLesson": true,
+      "hasActiveGuideSession": false,
+      "voiceDeepTutorLessonStatus": "idle",
+      "voiceSpeechRecognitionStatus": "idle",
+      "referenceMimicAction": null,
+      "canUseVoiceCoachVoiceInput": false,
+      "canUseVoiceCoachVoiceInputAfterRelease": false,
+      "latestCoachMessageId": null,
+      "lastSpokenCoachMessageId": null,
+      "snapshot": {}
+    },
+    "backend": {
+      "deeptutorVoiceState": {
+        "guideSessionId": "guide-1",
+        "guideSessionStatus": "completed",
+        "runtimeState": "planning",
+        "lessonBoard": {
+          "title": "Bright endings"
+        },
+        "lastTutorMessage": "Stay bright on the ending."
+      }
+    },
+    "expected": {
+      "lessonMode": "history",
+      "guideStatus": "completed",
+      "runtimeOwner": "planning",
+      "practiceIntent": "coach",
+      "hasActiveGuideSession": false,
+      "hasHistoricalLessonState": true
+    }
+  },
+  {
+    "name": "initialized-guided-warming",
+    "frontend": {
+      "deeptutorVoiceState": {
+        "guideSessionId": "guide-1",
+        "guideSessionStatus": "initialized"
+      },
+      "shouldRebuildLesson": false,
+      "hasActiveGuideSession": true,
+      "voiceDeepTutorLessonStatus": "idle",
+      "voiceSpeechRecognitionStatus": "idle",
+      "referenceMimicAction": null,
+      "canUseVoiceCoachVoiceInput": false,
+      "canUseVoiceCoachVoiceInputAfterRelease": false,
+      "latestCoachMessageId": null,
+      "lastSpokenCoachMessageId": null,
+      "snapshot": {}
+    },
+    "backend": {
+      "deeptutorVoiceState": {
+        "guideSessionId": "guide-1",
+        "guideSessionStatus": "initialized"
+      }
+    },
+    "expected": {
+      "lessonMode": "active",
+      "guideStatus": "initialized",
+      "runtimeOwner": "warming",
+      "practiceIntent": "coach",
+      "hasActiveGuideSession": true,
+      "hasHistoricalLessonState": true
+    }
+  },
+  {
+    "name": "coach-brief-history-without-guide",
+    "frontend": {
+      "deeptutorVoiceState": {
+        "coachBrief": {
+          "cueText": "Hee-ya gaiiiiz~"
+        }
+      },
+      "shouldRebuildLesson": false,
+      "hasActiveGuideSession": false,
+      "voiceDeepTutorLessonStatus": "idle",
+      "voiceSpeechRecognitionStatus": "idle",
+      "referenceMimicAction": null,
+      "canUseVoiceCoachVoiceInput": false,
+      "canUseVoiceCoachVoiceInputAfterRelease": false,
+      "latestCoachMessageId": null,
+      "lastSpokenCoachMessageId": null,
+      "snapshot": {}
+    },
+    "backend": {
+      "deeptutorVoiceState": {
+        "coachBrief": {
+          "cueText": "Hee-ya gaiiiiz~"
+        }
+      }
+    },
+    "expected": {
+      "lessonMode": "history",
+      "guideStatus": "idle",
+      "runtimeOwner": "off",
+      "practiceIntent": "coach",
+      "hasActiveGuideSession": false,
+      "hasHistoricalLessonState": true
+    }
+  }
+]

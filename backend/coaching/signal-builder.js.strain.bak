@@ -1,0 +1,3651 @@
+'use strict';
+
+/**
+ * SignalBuilder v2 — the deterministic core that produces a CoachingSignal.
+ *
+ * Takes: raw metrics, session state, user utterance, lesson state.
+ * Produces: a structured CoachingSignal v2 JSON.
+ * The LLM never sees raw metrics — only this signal.
+ *
+ * v2 design principle: "Code decides what, model decides how."
+ *   - targetFit.pitch/resonance/weight: discrete status from bands.
+ *   - coachingDecision.primaryFocus: mapped from primaryIssue.
+ *   - coachingDecision.recommendedDrill: full object, code-selected.
+ *   - history.baseline: deltas vs frozen baseline (if present).
+ *   - doNotSay: phrases the model MUST not say (drill contraindications, safety, etc.).
+ */
+
+const {
+  buildCoachingSignal,
+  buildReferenceFit,
+  COACHING_SIGNAL_SCHEMA,
+  FOCUS_AXES,
+  PITCH_STATUSES,
+  RESONANCE_STATUSES,
+  WEIGHT_STATUSES,
+  TAKE_KINDS,
+  SESSION_TIERS,
+} = require('./signal-schema');
+const { assessSafetyState, assessCaptureReliability } = require('./safety-gates');
+const { resolvePolicy, normalizePracticeMode } = require('./policy-gates');
+const {
+  isVoiceAttemptUsable,
+  resolveVoiceMeasurementUsability,
+} = require('../voice-measurement-validity');
+// 2026-07-18 truth+safety wave: canonical warn thresholds (adapter semantics) so
+// detectIssues' strain/breathy issue bars match the safety gate's warn tier
+// instead of the old 0.10/0.12 magic numbers.
+const {
+  isVocaliseTakeKind,
+  resolveStrainThresholds,
+  resolveBreathyThreshold,
+} = require('./safety-thresholds');
+// 2026-07-26 phase B (sentence teardown): per-section localization of the weakest
+// fragment of the spoken line. ADVISORY ONLY on this wave — it attaches to the
+// signal and renders one line, and deliberately does NOT touch intents or policy.
+// Phase C is the consumer that will isolate and drill the named fragment.
+const { scoreTakeSections } = require('./section-scorer');
+const {
+  canonicalizeVoiceTargetSource,
+  isVoiceRecordComparableToTarget,
+  resolveVoiceTargetIdentity,
+} = require('../voice-target-identity');
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function toFiniteOrNull(value) {
+  if (value == null || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function hzToSemitones(hz, refHz) {
+  if (hz == null || refHz == null || hz <= 0 || refHz <= 0) return null;
+  return 12.0 * Math.log2(hz / refHz);
+}
+
+function clamp(value, min, max) {
+  if (value == null || !Number.isFinite(value)) return null;
+  return Math.max(min, Math.min(max, value));
+}
+
+function joinWithLimit(parts, max = 80) {
+  return parts.filter(Boolean).join(' ').slice(0, max);
+}
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeTargetSourceCategory(value) {
+  return canonicalizeVoiceTargetSource(value);
+}
+
+function normalizeUnitFraction(value) {
+  const number = toFiniteOrNull(value);
+  if (number == null) return null;
+  return Math.abs(number) > 1 ? number / 100 : number;
+}
+
+// 2026-07-26 MTF-ONLY: 'masculine' is no longer a resolvable direction — the
+// whitelist below simply does not contain it, so a masculinizing value falls
+// through like any other unrecognised one. Unrecognised presets keep the
+// historical 'feminine' default because the metric contract still needs some
+// band orientation.
+function directionFromTarget(targetPreset, explicitDirection) {
+  // An EXPLICIT direction on a stored artifact is still honoured, including a
+  // historical 'neutral' — the artifact recorded what was true when it was
+  // written, and rewriting it would change past measurements. What no longer
+  // exists is a PRESET that produces 'neutral': the two that did were retired
+  // 2026-07-30, so the preset-derived branch is gone and every recognised preset
+  // now yields the same 'feminine' default an unrecognised one gets.
+  if (['feminine', 'neutral'].includes(explicitDirection)) {
+    return explicitDirection;
+  }
+  return 'feminine';
+}
+
+/**
+ * 2026-07-26: STRICT preset -> practice-direction hint.
+ *
+ * Distinct from directionFromTarget above, which DEFAULTS an unknown preset to
+ * 'feminine' because the metric contract needs some band orientation. A hint we
+ * print to the learner and hand the model must never be invented: an unknown or
+ * deliberately ambiguous style yields NO hint, so the renderer simply omits the
+ * Direction line and the model falls back to its direction-neutral cue set.
+ *
+ * The id list mirrors voice-cue-sheet.js PRESET_PROFILES / the DSP's
+ * TARGET_PROFILES (services/voice-trainer audio_analysis.py). Neutral styles
+ * (androgynous, gender-neutral) are intentionally NOT a hint — "neutral" is not
+ * a direction to move in, and claiming one would risk a wrong-direction cue.
+ *
+ * 2026-07-26 MTF-ONLY: the retired masculinizing presets are likewise absent, so
+ * a stored FTM session yields NO hint and the Direction line is simply omitted.
+ */
+const TARGET_PRESET_DIRECTION_HINTS = Object.freeze({
+  'cute-feminine': 'feminizing',
+  'everyday-feminine': 'feminizing',
+  'bright-playful': 'feminizing',
+  'australian-bright-feminine': 'feminizing',
+  'soft-feminine': 'feminizing',
+});
+
+function deriveDirectionHintFromTarget(targetPreset) {
+  const key = String(targetPreset || '').trim().toLowerCase();
+  if (!key) return null;
+  return TARGET_PRESET_DIRECTION_HINTS[key] || null;
+}
+
+/**
+ * Resolve the learner's practice direction plus WHERE it came from.
+ *
+ * Explicit profile direction ALWAYS wins; the selected voice target is only a
+ * fallback hint. Deterministic and side-effect free.
+ *
+ * @returns {{direction: 'feminizing'|null, source: 'profile'|'target'|null}}
+ */
+function resolveCoachingDirection(learnerContext, targetPreset) {
+  const explicit = resolveLearnerDirection(learnerContext);
+  if (explicit) {
+    return { direction: explicit, source: 'profile' };
+  }
+  const derived = deriveDirectionHintFromTarget(targetPreset);
+  if (derived) {
+    return { direction: derived, source: 'target' };
+  }
+  return { direction: null, source: null };
+}
+
+/**
+ * Structured console witness for deterministic coaching starvation.
+ *
+ * Matches the runtime's existing coach_gates style — a single object handed to
+ * console.log, so journalctl carries one structured line per event. Kept
+ * best-effort: a witness must never be able to break a coaching turn.
+ * Exported so tests can assert the event without a live runtime.
+ */
+function emitCoachWitness(event) {
+  try {
+    if (typeof console !== 'undefined' && console && typeof console.log === 'function') {
+      console.log({ ...event });
+    }
+  } catch {
+    /* never let telemetry break coaching */
+  }
+}
+
+function validateTargetBandPair(name, floor, ceiling, minimum, maximum) {
+  if (floor == null || ceiling == null) {
+    return { floor, ceiling, failures: [] };
+  }
+  const failures = [];
+  if (floor < minimum || floor > maximum || ceiling < minimum || ceiling > maximum) {
+    failures.push(`invalid_target_${name}_range`);
+  }
+  if (floor >= ceiling) {
+    failures.push(`invalid_target_${name}_order`);
+  }
+  return failures.length > 0
+    ? { floor: null, ceiling: null, failures }
+    : { floor, ceiling, failures };
+}
+
+/**
+ * Normalize the real Python attempt contract once. Canonical metrics remain
+ * 0..1 fractions internally; legacy *Pct aliases are accepted only as a
+ * witnessed compatibility lane. Exact summary.target bands win over UI state.
+ */
+function resolveMetricContract(voiceState, summaryOverride = null) {
+  const summary = summaryOverride || voiceState?.lastSummary || {};
+  const metrics = isRecord(summary.metrics) ? summary.metrics : {};
+  const advanced = isRecord(metrics.advanced) ? metrics.advanced : {};
+  const target = isRecord(summary.target) ? summary.target : {};
+  const targetProfile = isRecord(voiceState?.targetVoiceProfile)
+    ? voiceState.targetVoiceProfile
+    : {};
+  const legacyMetricFields = [];
+
+  const canonicalFraction = (canonical, legacy) => {
+    const canonicalValue = toFiniteOrNull(metrics[canonical]);
+    if (canonicalValue != null) return canonicalValue;
+    const legacyValue = toFiniteOrNull(metrics[legacy]);
+    if (legacyValue == null) return null;
+    legacyMetricFields.push(legacy);
+    return normalizeUnitFraction(legacyValue);
+  };
+
+  const targetHitRaw = toFiniteOrNull(metrics.targetHitPct);
+  const targetHitFraction = targetHitRaw == null
+    ? null
+    : normalizeUnitFraction(targetHitRaw);
+  if (targetHitRaw != null && Math.abs(targetHitRaw) > 1) {
+    legacyMetricFields.push('targetHitPct:percent-unit');
+  }
+
+  const targetPreset = summary.targetPreset || voiceState?.targetPreset || 'cute-feminine';
+  const direction = directionFromTarget(
+    targetPreset,
+    target.direction || targetProfile.direction || voiceState?.profile?.direction,
+  );
+  const rawPitchFloorHz = toFiniteOrNull(target.pitchFloorHz)
+    ?? toFiniteOrNull(targetProfile.pitchFloorHz)
+    ?? toFiniteOrNull(targetProfile.advancedBands?.pitchP10HzFloor);
+  const rawPitchCeilingHz = toFiniteOrNull(target.pitchCeilingHz)
+    ?? toFiniteOrNull(targetProfile.pitchCeilingHz)
+    ?? toFiniteOrNull(targetProfile.advancedBands?.pitchP90HzCeiling);
+
+  let resonanceFloor = toFiniteOrNull(target.resonanceFloor)
+    ?? toFiniteOrNull(targetProfile.resonanceFloor);
+  let resonanceCeiling = toFiniteOrNull(target.resonanceCeiling)
+    ?? toFiniteOrNull(targetProfile.resonanceCeiling);
+  let weightFloor = toFiniteOrNull(target.weightFloor)
+    ?? toFiniteOrNull(targetProfile.weightFloor);
+  let weightCeiling = toFiniteOrNull(target.weightCeiling)
+    ?? toFiniteOrNull(targetProfile.weightCeiling);
+
+  // Backward-compatible expansion of the old directional threshold aliases.
+  const legacyResonance = toFiniteOrNull(target.minResonance)
+    ?? normalizeUnitFraction(targetProfile.resonancePct);
+  const legacyWeight = toFiniteOrNull(target.maxWeight)
+    ?? normalizeUnitFraction(targetProfile.weightPct);
+  if (resonanceFloor == null || resonanceCeiling == null) {
+    if (legacyResonance != null) {
+      if (direction === 'neutral') {
+        resonanceFloor = clamp(legacyResonance - 0.14, 0, 1);
+        resonanceCeiling = clamp(legacyResonance + 0.14, 0, 1);
+      } else {
+        resonanceFloor = legacyResonance;
+        resonanceCeiling = 1;
+      }
+    }
+  }
+  if (weightFloor == null || weightCeiling == null) {
+    if (legacyWeight != null) {
+      if (direction === 'neutral') {
+        weightFloor = clamp(legacyWeight - 0.14, 0, 1);
+        weightCeiling = clamp(legacyWeight + 0.14, 0, 1);
+      } else {
+        weightFloor = 0;
+        weightCeiling = legacyWeight;
+      }
+    }
+  }
+
+  const pitchBand = validateTargetBandPair(
+    'pitch_band', rawPitchFloorHz, rawPitchCeilingHz, 80, 400,
+  );
+  const resonanceBand = validateTargetBandPair(
+    'resonance_band', resonanceFloor, resonanceCeiling, 0, 1,
+  );
+  const weightBand = validateTargetBandPair(
+    'weight_band', weightFloor, weightCeiling, 0, 1,
+  );
+  const rawTargetSource = target.source
+    || voiceState?.targetSource
+    || (voiceState?.referenceClipId ? 'reference' : 'preset');
+  const targetSource = normalizeTargetSourceCategory(rawTargetSource);
+  const targetAnalysisVersion = target.analysisVersion
+    || targetProfile.analysisVersion
+    || summary.analysisVersion
+    || null;
+  const targetIdentity = resolveVoiceTargetIdentity({
+    targetSource,
+    targetPreset,
+    targetProfileId: target.targetProfileId || targetProfile.profileId || null,
+    referenceClipId: summary.referenceClipId || voiceState?.referenceClipId || targetProfile.clipId || null,
+    direction,
+    analysisVersion: targetAnalysisVersion,
+    pitchFloorHz: pitchBand.floor,
+    pitchCeilingHz: pitchBand.ceiling,
+    resonanceFloor: resonanceBand.floor,
+    resonanceCeiling: resonanceBand.ceiling,
+    weightFloor: weightBand.floor,
+    weightCeiling: weightBand.ceiling,
+  });
+  const targetValidationFailures = [
+    ...pitchBand.failures,
+    ...resonanceBand.failures,
+    ...weightBand.failures,
+    ...(targetSource === 'unknown' ? ['invalid_target_source'] : []),
+  ];
+  const pitchFloorHz = pitchBand.floor;
+  const pitchCeilingHz = pitchBand.ceiling;
+  resonanceFloor = resonanceBand.floor;
+  resonanceCeiling = resonanceBand.ceiling;
+  weightFloor = weightBand.floor;
+  weightCeiling = weightBand.ceiling;
+
+  const measurementAvailable = advanced.measurementAvailable === false
+    ? false
+    : advanced.measurementAvailable === true
+      ? true
+      : null;
+  const hasTargetContract = [
+    pitchFloorHz,
+    pitchCeilingHz,
+    resonanceFloor,
+    resonanceCeiling,
+    weightFloor,
+    weightCeiling,
+  ].every((value) => value != null) && targetValidationFailures.length === 0;
+
+  return {
+    summary,
+    metrics,
+    advanced,
+    values: {
+      meanPitchHz: toFiniteOrNull(metrics.meanPitchHz),
+      resonanceMean: canonicalFraction('resonanceMean', 'resonancePct'),
+      weightMean: canonicalFraction('weightMean', 'weightPct'),
+      targetHitFraction,
+    },
+    target: {
+      source: targetSource,
+      targetPreset,
+      targetProfileId: target.targetProfileId || targetProfile.profileId || null,
+      targetKey: targetIdentity.targetKey,
+      analysisVersion: targetAnalysisVersion,
+      direction,
+      pitchFloorHz,
+      pitchCeilingHz,
+      resonanceFloor,
+      resonanceCeiling,
+      weightFloor,
+      weightCeiling,
+      minTargetHitPct: normalizeUnitFraction(target.minTargetHitPct),
+    },
+    measurementAvailable,
+    measurementRejectionReasons: Array.isArray(advanced.measurementRejectionReasons)
+      ? advanced.measurementRejectionReasons.slice(0, 8)
+      : [],
+    hasTargetContract,
+    targetValidationFailures,
+    targetIdentityFailures: targetIdentity.reasons,
+    legacyMetricFields: [...new Set(legacyMetricFields)],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Issue detection (v1 retained — output is now consumed by coachingDecision)
+// ---------------------------------------------------------------------------
+
+// 2026-07-19 zero-friction wave: per-take-kind HONEST-MIRROR issue suppression.
+// Some detections are measurement artifacts for particular take kinds — a trill
+// is SUPPOSED to wobble (pitch_unstable/strain would lie), a hum/SOVT take has
+// no reliable resonance read (F2/frontness unmeasured or garbage), and
+// ear_training/silent takes have nothing to critique at all. Suppressing here
+// keeps the issue path consistent with the kindMetrics contract.
+const KIND_SUPPRESSED_ISSUES = Object.freeze({
+  trill: Object.freeze(['pitch_unstable', 'strain_risk', 'breathy_quality']),
+  hum_sovt: Object.freeze(['resonance_slightly_back', 'resonance_too_forward', 'spectral_tilt_dark']),
+  ear_training: '*',
+  silent: '*',
+});
+
+/**
+ * Detect the primary voice issue from metrics.
+ * Returns { primaryIssue, secondaryIssue, confidence, plainEvidence }
+ *
+ * `options.takeKind` (optional): vocalise kinds get the lenient strain issue
+ * bar (same resolver the safety gate uses), and per-kind lying detections are
+ * suppressed (KIND_SUPPRESSED_ISSUES).
+ */
+// Fairness cap (2026-08-05): stop the coach drilling the same dimension every
+// turn. Reads the previous focus from voiceState.lastCueGiven.axis (stamped per
+// turn by the runtime) -- no new state, so no test-determinism risk. No-op when
+// lastCueGiven is absent (every existing detectIssues(state, mode) test).
+const FAIRNESS_MARGIN = 0.06;
+const FOCUS_AXIS_GROUP = {
+  pitch_floor: 'pitch', pitch_lower: 'pitch', pitch_stability: 'pitch',
+  resonance_forward: 'resonance',
+  vocal_weight: 'weight',
+  tone_clarity: 'breathy',
+  strain_reduction: 'strain',
+  phrase_ending: 'phrase',
+  speech_rate: 'rate',
+};
+function focusAxisGroup(focus) {
+  return FOCUS_AXIS_GROUP[String(focus || '')] || null;
+}
+function issueAxisGroup(issue) {
+  return focusAxisGroup(primaryIssueToFocus(issue));
+}
+
+function detectIssues(voiceState, practiceMode, options = {}) {
+  const takeKind = options && typeof options.takeKind === 'string' ? options.takeKind : null;
+  const summary = voiceState?.lastSummary || voiceState?.lastAttemptArtifact?.summary || {};
+  const contract = resolveMetricContract(voiceState, summary);
+  const advanced = contract.advanced;
+  const phraseComparison = voiceState?.phraseComparison || {};
+  const targetProfile = voiceState?.targetVoiceProfile || {};
+  if (contract.measurementAvailable === false) {
+    return {
+      primaryIssue: null,
+      secondaryIssue: null,
+      confidence: 0,
+      plainEvidence: '',
+    };
+  }
+  const targetFit = buildTargetFit(
+    voiceState,
+    summary,
+    advanced,
+    advanced.quality || {},
+    targetProfile,
+    { takeKind },
+  );
+
+  // 2026-07-26 zero-preserving parse (same defect class as the risks below):
+  // `Number(x) || null` collapsed a tunnelHoldPct of exactly 0 — the WORST
+  // possible phrase ending — to "no measurement", so it silently fired no
+  // issue while 1% did. toFiniteOrNull keeps 0 as 0.
+  const phraseEndingMatch = toFiniteOrNull(phraseComparison.tunnelHoldPct);
+
+  const issues = [];
+
+  // Weight analysis
+  if (targetFit.weight.status === 'too_heavy' || targetFit.weight.status === 'too_light') {
+    issues.push({
+      issue: targetFit.weight.status === 'too_heavy'
+        ? 'voice_weight_heavy'
+        : 'voice_weight_light',
+      confidence: styleConfidence(
+        targetFit.weight.gap,
+        SEVERITY_SPREAD.weight,
+        AXIS_LEVERAGE.weight,
+      ),
+      evidence: targetFit.weight.evidence,
+    });
+  }
+
+  // COMPOSED pitch verdict — the take is inside the pitch band, but it got there
+  // on air pressure rather than a laryngeal setting (see
+  // detectPitchPressureSignature). Without this the axes score independently and a
+  // pressed, effortful take with an in-band number produces NO issue at all, so the
+  // coach praises the one habit most likely to injure the learner.
+  //
+  // Confidence 0.8 is a RANKING choice, not a measurement, and it is set relative to
+  // the bars already in this list: above the single-axis weight/resonance issues
+  // (0.7), because a composed verdict that lost to one of its own constituents would
+  // let the coach say "lighten the voice" when the finding is "you are pushing air to
+  // reach the band"; and below a live strain verdict once strainRisk >= 0.8 (the
+  // strain_risk issue carries strainRisk itself as its confidence), so the existing
+  // safety-first ordering is unchanged.
+  if (targetFit.pitch.successSuppressed) {
+    issues.push({
+      issue: 'pitch_pressed_in_band',
+      confidence: 0.8,
+      evidence: 'Pitch is inside the target band, but the tone is pressed — air pressure is lifting it, not an easier setting. The same note, with less effort behind it, is the win here.',
+    });
+  }
+
+  // Resonance analysis
+  if (targetFit.resonance.status === 'too_dark' || targetFit.resonance.status === 'too_bright') {
+    issues.push({
+      issue: targetFit.resonance.status === 'too_dark'
+        ? 'resonance_slightly_back'
+        : 'resonance_too_forward',
+      confidence: styleConfidence(
+        targetFit.resonance.gap,
+        SEVERITY_SPREAD.resonance,
+        AXIS_LEVERAGE.resonance,
+      ),
+      evidence: targetFit.resonance.evidence,
+    });
+  }
+
+  // Phrase ending issues
+  if (phraseEndingMatch != null && phraseEndingMatch < 65) {
+    issues.push({
+      issue: 'phrase_ending_instability',
+      // Sentence-ending melody is rank 1 in the dossier's leverage ordering, so it
+      // carries the full leverage weight — the spread itself is unchanged.
+      confidence: styleConfidence(
+        70 - phraseEndingMatch,
+        SEVERITY_SPREAD.tunnelHoldPct,
+        AXIS_LEVERAGE.melody,
+      ),
+      evidence: `Phrase ending dropped or wavered — tunnel hold ${Math.round(phraseEndingMatch)}%.`,
+    });
+  }
+
+  // Pitch trajectory issues (if not pitch-stable mode)
+  const pitchTrajectory = advanced.pitchTrajectory || summary?.pitchTrajectory || '';
+  if (/fall(?:ing|s)/i.test(pitchTrajectory) && practiceMode !== 'pitch_stable') {
+    issues.push({
+      issue: 'pitch_falling_at_end',
+      confidence: 0.6,
+      // 2026-07-27 corollary of the pressure finding above (atlas 2.6): subglottal
+      // pressure controls pitch as well as loudness, so a sag at the END of a long
+      // phrase is pressure DECAYING, not the larynx failing. The old evidence line
+      // ('Pitch trajectory is falling at phrase end.') named no cause, which left
+      // the renderer free to invent a laryngeal one and coach the wrong body. This
+      // names the breath cause, so the cue targets steady abdominal pressure.
+      evidence: 'Pitch falls away at the end of the line — that is the air running out, not the voice failing. Let the ribs sink slowly so the pressure stays even to the last word.',
+    });
+  }
+
+  // Voice quality analysis (from advanced.quality). Issue bars align to the
+  // canonical WARN thresholds (safety-thresholds.js — contract 0.52 strain /
+  // 0.68 breathy, profile-capped the same way the safety gate is), replacing
+  // the 0.10/0.12 magic that flagged nearly every ordinary take as strained.
+  // At/above warn the raw risk (0.52..1) is itself a sane confidence proxy.
+  const quality = advanced.quality || {};
+  const qualityBands = targetProfile?.advancedBands?.quality || {};
+  // 2026-07-26: `Number(x) || null` collapsed a LEGITIMATE 0 risk to null (0 is
+  // falsy), so a perfectly clean take was indistinguishable from a missing
+  // measurement. toFiniteOrNull keeps 0 as 0 and maps only null/''/NaN to null.
+  // The DSP layer now returns null more often (rather than manufacturing a
+  // mid-band risk from missing inputs), so this distinction is load-bearing.
+  const breathyRisk = toFiniteOrNull(quality.breathyRisk);
+  const strainRisk = toFiniteOrNull(quality.strainRisk);
+
+  const breathyIssueBar = resolveBreathyThreshold(qualityBands).warn;
+  if (breathyRisk != null && breathyRisk >= breathyIssueBar) {
+    issues.push({
+      issue: 'breathy_quality',
+      confidence: riskConfidence(breathyRisk, breathyIssueBar),
+      // The metric measures glottal CLOSURE / airy phonation — not breathing.
+      // Worded as the physical action so the model never renders it as "breath".
+      evidence: 'Airy tone — start the word on a tiny, gentle "uh" so the fold closure is clean.',
+    });
+  }
+
+  const strainIssueBar = resolveStrainThresholds(qualityBands, { takeKind }).warn;
+  if (strainRisk != null && strainRisk >= strainIssueBar) {
+    issues.push({
+      issue: 'strain_risk',
+      confidence: riskConfidence(strainRisk, strainIssueBar),
+      evidence: `Vocal strain indicators — risk ${Math.round(strainRisk * 100)}%.`,
+    });
+  }
+
+  // Spectral tilt analysis (darkness proxy). Only an ISSUE when the voice is
+  // also darker than its resonance target — the `too_dark` guard is a TARGET-
+  // RELATIVE correction-polarity check, not a gender-direction check, so it
+  // survives the MTF-only cut unchanged: a learner already at or above their
+  // resonance band must not be told to brighten further.
+  // Same zero-preserving parse as the risks above (audited 2026-07-26): a 0
+  // dB/oct tilt is a real reading, not a missing one.
+  const spectralTilt = toFiniteOrNull(advanced.spectralTiltMeanDbPerOct);
+  if (
+    spectralTilt != null && spectralTilt < -12 &&
+    targetFit.resonance.status === 'too_dark'
+  ) {
+    issues.push({
+      issue: 'spectral_tilt_dark',
+      // A darkness proxy for the resonance axis, so it inherits resonance leverage.
+      confidence: styleConfidence(
+        spectralTilt + 8,
+        SEVERITY_SPREAD.tiltDbPerOct,
+        AXIS_LEVERAGE.resonance,
+      ),
+      evidence: `Spectral tilt ${spectralTilt.toFixed(1)} dB/oct — voice sounds darker than target.`,
+    });
+  }
+
+  // Pitch floor (P10) — if P10 dips below the band floor, that's a pitch_floor issue
+  const p10 = toFiniteOrNull(advanced.pitchP10Hz);
+  const p10Floor = contract.target.pitchFloorHz;
+  if (p10 != null && p10Floor != null && p10 < p10Floor) {
+    issues.push({
+      issue: 'pitch_floor_under_target',
+      // Scored in SEMITONES, not Hz. The old `dip / 30` was calibrated far too
+      // tight for the population it serves: an untrained pre-training voice sits
+      // 60-90 Hz under a feminine floor, so this term saturated at 1.0 on
+      // essentially every early take and could never fall as the learner improved.
+      // Semitones also make the gap perceptually honest — 30 Hz is a very different
+      // interval at 120 Hz than at 240 Hz.
+      confidence: styleConfidence(
+        hzToSemitones(p10, p10Floor),
+        SEVERITY_SPREAD.pitchSt,
+        AXIS_LEVERAGE.pitch,
+      ),
+      evidence: `Lower pitch floor dipped to ${Math.round(p10)} Hz — target floor ${Math.round(p10Floor)} Hz.`,
+    });
+  }
+
+  // Pitch above ceiling (P90) — the OVERSHOOT twin of the floor check above: if
+  // the upper pitch sits above the target ceiling, coach to bring it down. This
+  // is correction polarity, not gender direction, and it stays live under
+  // MTF-only: every feminine preset has a real ceiling (cute-feminine 188-255 Hz)
+  // and the neutral presets are a tight band (152-172 Hz), so both overshoot.
+  const p90 = toFiniteOrNull(advanced.pitchP90Hz);
+  const p90Ceiling = contract.target.pitchCeilingHz;
+  if (p90 != null && p90Ceiling != null && p90 > p90Ceiling) {
+    issues.push({
+      issue: 'pitch_above_target',
+      // Semitone-scored for the same reason as the floor twin above.
+      confidence: styleConfidence(
+        hzToSemitones(p90, p90Ceiling),
+        SEVERITY_SPREAD.pitchSt,
+        AXIS_LEVERAGE.pitch,
+      ),
+      evidence: `Upper pitch reached ${Math.round(p90)} Hz — target ceiling ${Math.round(p90Ceiling)} Hz.`,
+    });
+  }
+
+  // Pitch stability
+  const pitchStdSt = toFiniteOrNull(advanced.pitchStdSt);
+  const pitchStdCeiling = toFiniteOrNull(targetProfile?.advancedBands?.pitchStdStCeiling);
+  if (pitchStdSt != null && pitchStdCeiling != null && pitchStdSt > pitchStdCeiling) {
+    issues.push({
+      issue: 'pitch_unstable',
+      confidence: styleConfidence(
+        pitchStdSt - pitchStdCeiling,
+        SEVERITY_SPREAD.pitchStdSt,
+        AXIS_LEVERAGE.pitch,
+      ),
+      evidence: `Pitch spread ${pitchStdSt.toFixed(2)} st — ceiling ${pitchStdCeiling.toFixed(2)} st.`,
+    });
+  }
+
+  // Per-take-kind honest-mirror suppression (see KIND_SUPPRESSED_ISSUES).
+  const suppressed = takeKind ? KIND_SUPPRESSED_ISSUES[takeKind] : null;
+  const kept = suppressed === '*'
+    ? []
+    : (Array.isArray(suppressed) ? issues.filter((i) => !suppressed.includes(i.issue)) : issues);
+
+  // Sort by confidence (primary signal: gap * axis leverage).
+  kept.sort((a, b) => b.confidence - a.confidence);
+
+  // Fairness cap: if the top issue is the SAME axis group as last turn's focus
+  // and is not a safety (strain) issue, and a different-group issue sits within
+  // FAIRNESS_MARGIN, prefer the different group so the coach does not repeat the
+  // same dimension turn after turn. Never overrides a genuinely-dominant issue
+  // (no near-tie) or a safety issue. No-op without lastCueGiven.
+  let ranked = kept;
+  const prevFocus = voiceState && voiceState.lastCueGiven && voiceState.lastCueGiven.axis;
+  const prevGroup = prevFocus ? focusAxisGroup(prevFocus) : null;
+  if (prevGroup && kept.length > 1 && ((kept[0] && kept[0].confidence) || 0) > 0) {
+    const top = kept[0];
+    const topGroup = issueAxisGroup(top.issue);
+    if (topGroup === prevGroup && topGroup !== 'strain') {
+      const alt = kept.find((i) => {
+        if (i === top) return false;
+        if (((top.confidence || 0) - (i.confidence || 0)) > FAIRNESS_MARGIN) return false;
+        const g = issueAxisGroup(i.issue);
+        return g != null && g !== prevGroup;
+      });
+      if (alt) {
+        ranked = [alt].concat(kept.filter((i) => i !== alt));
+      }
+    }
+  }
+
+  return {
+    primaryIssue: (ranked[0] && ranked[0].issue) || null,
+    secondaryIssue: (ranked[1] && ranked[1].issue) || null,
+    confidence: (ranked[0] && ranked[0].confidence) || 0,
+    plainEvidence: (ranked[0] && ranked[0].evidence) || '',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Personalization
+// ---------------------------------------------------------------------------
+
+function normalizeComparableTargetIdentity(targetIdentity) {
+  if (typeof targetIdentity === 'string') {
+    return resolveVoiceTargetIdentity({ targetSource: 'built-in', targetPreset: targetIdentity });
+  }
+  return targetIdentity;
+}
+
+function isComparableHistoryRecord(record, targetIdentity) {
+  const normalizedIdentity = normalizeComparableTargetIdentity(targetIdentity);
+  return normalizedIdentity == null
+    ? true
+    : isVoiceRecordComparableToTarget(record, normalizedIdentity);
+}
+
+function detectRecentWin(voiceState, learnerContext, targetIdentity = null) {
+  const recentAttempts = (Array.isArray(learnerContext?.recentAttempts)
+    ? learnerContext.recentAttempts
+    : []).filter((attempt) => (
+      isVoiceAttemptUsable(attempt)
+      && isComparableHistoryRecord(attempt, targetIdentity)
+    ));
+  if (recentAttempts.length >= 2) {
+    const latest = recentAttempts[recentAttempts.length - 1];
+    const previous = recentAttempts[recentAttempts.length - 2];
+    if (latest?.targetHitPct != null && previous?.targetHitPct != null) {
+      const latestHit = normalizeUnitFraction(latest.targetHitPct);
+      const previousHit = normalizeUnitFraction(previous.targetHitPct);
+      if (latestHit != null && previousHit != null && latestHit > previousHit + 0.05) {
+        return 'Target hit improved in the last few attempts.';
+      }
+    }
+  }
+  const lastSummary = voiceState?.lastSummary || {};
+  const targetHitPct = normalizeUnitFraction(lastSummary?.metrics?.targetHitPct);
+  if (
+    resolveVoiceMeasurementUsability(lastSummary).usableForScoring
+    && targetHitPct != null
+    && targetHitPct > 0.75
+  ) {
+    return 'Good target alignment on the last take.';
+  }
+  return '';
+}
+
+function resolveCurrentLesson(lessonState) {
+  if (!lessonState) return '';
+  if (lessonState.currentKnowledgePoint?.title) {
+    return lessonState.currentKnowledgePoint.title;
+  }
+  if (lessonState.lessonBoard?.title) {
+    return lessonState.lessonBoard.title;
+  }
+  return '';
+}
+
+// ---------------------------------------------------------------------------
+// Learner memo (memory -> personalization)
+//
+// A compact, deterministic block injected into the coach prompt so the tutor
+// can greet by name and reflect continuity (topics, recent wins, last target).
+// MUST be impossible to crash on missing fields — every read is defensive and
+// every helper tolerates null/undefined/non-array inputs. Kept small (~60
+// tokens) so it never crowds the rest of the signal.
+// ---------------------------------------------------------------------------
+
+function memoStr(value, max = 80) {
+  if (typeof value !== 'string') return '';
+  // v5: neutralize prompt-control chars (newlines, CR, tabs, other C0 + DEL) → a
+  // single space, then collapse runs — so user-derived memo text (moments /
+  // coaching preferences) can never forge fake prompt roles or headers once the
+  // memo is surfaced into the coach's prompt. Covers every memo field (memoList,
+  // selectWhatWorked, name/topics, coachPrefs/recentMoments all route through here).
+  return value.replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function memoList(value, count, max = 60) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    const text = memoStr(item, max);
+    if (text) out.push(text);
+    if (out.length >= count) break;
+  }
+  return out;
+}
+
+// v4: map a coachingDecision.primaryFocus (rich axis like 'resonance_forward')
+// to the 4-axis whatWorked/moment vocab ('pitch'|'resonance'|'weight'|'prosody').
+// Returns null for focuses that don't map cleanly (tone_clarity / strain_reduction),
+// so relevance ordering simply falls back to newest-first there.
+function focusToAxis(focus) {
+  if (typeof focus !== 'string' || !focus) return null;
+  if (focus.startsWith('pitch')) return 'pitch';
+  if (focus.startsWith('resonance')) return 'resonance';
+  if (focus.startsWith('vocal_weight') || focus === 'weight') return 'weight';
+  if (focus === 'phrase_ending' || focus === 'speech_rate' || focus === 'prosody') return 'prosody';
+  return null;
+}
+
+// v4: read a whatWorked list whose entries are {text, axis?, date} (back-compat:
+// a legacy plain string is treated as {text, axis:null, date:''}). RELEVANCE-FIRST
+// ordering: entries whose axis === currentAxis come first (in their existing
+// newest-first order), then the rest (newest-first). Returns up to `count` texts.
+function selectWhatWorked(value, count, currentAxis = null, max = 60) {
+  if (!Array.isArray(value)) return [];
+  const norm = [];
+  for (const item of value) {
+    if (typeof item === 'string') {
+      const text = memoStr(item, max);
+      if (text) norm.push({ text, axis: null });
+    } else if (item && typeof item === 'object') {
+      const text = memoStr(item.text, max);
+      if (text) norm.push({ text, axis: typeof item.axis === 'string' ? item.axis : null });
+    }
+  }
+  // Stable partition: matches-first, others-after (each subgroup keeps input order,
+  // which is already newest-first from the store).
+  const ordered = currentAxis
+    ? [...norm.filter((e) => e.axis === currentAxis), ...norm.filter((e) => e.axis !== currentAxis)]
+    : norm;
+  const out = [];
+  for (const e of ordered) {
+    out.push(e.text);
+    if (out.length >= count) break;
+  }
+  return out;
+}
+
+// v4: whole-day gap between two ms-epoch timestamps (floored, >= 0). Returns null
+// when lastSessionAt isn't a usable timestamp.
+function daysBetween(lastSessionAt, now = Date.now()) {
+  const last = Number(lastSessionAt);
+  if (!Number.isFinite(last) || last <= 0) return null;
+  const ms = Math.max(0, Number(now) - last);
+  return Math.floor(ms / 86400000);
+}
+
+// v4: the last N DISTINCT focus axes from the sessions ring (newest first).
+// sessions is newest-LAST, so we walk it in reverse.
+function deriveFocusHistory(sessions, n = 3) {
+  if (!Array.isArray(sessions)) return [];
+  const out = [];
+  const seen = new Set();
+  for (let i = sessions.length - 1; i >= 0; i -= 1) {
+    const axis = sessions[i] && typeof sessions[i].focusAxis === 'string' ? sessions[i].focusAxis : null;
+    if (!axis || seen.has(axis)) continue;
+    seen.add(axis);
+    out.push(axis);
+    if (out.length >= n) break;
+  }
+  return out;
+}
+
+/**
+ * Pull the baseline snapshot out of a learner-context snapshot for "vs baseline"
+ * deltas. The snapshot may be the outer object ({ learnerContext: { baseline } })
+ * or the inner learnerContext directly — handle both. SINGLE SOURCE OF TRUTH so the
+ * buffered (coachingTurn) and streaming coach paths can't drift — one path silently
+ * dropped baseline before this was extracted.
+ */
+function pickBaseline(snapshot) {
+  return (snapshot && snapshot.learnerContext && snapshot.learnerContext.baseline)
+    || (snapshot && snapshot.baseline)
+    || null;
+}
+
+function resolveCoachPreferencePolicy(learnerContext) {
+  const ctx = learnerContext && typeof learnerContext === 'object' ? learnerContext : {};
+  const nested = ctx.learnerContext && typeof ctx.learnerContext === 'object'
+    ? ctx.learnerContext
+    : {};
+  const preferences = Array.isArray(ctx.coachPreferences)
+    ? ctx.coachPreferences
+    : (Array.isArray(nested.coachPreferences) ? nested.coachPreferences : []);
+  const ids = preferences
+    .map((preference) => memoStr(preference?.id || preference?.preferenceId, 80))
+    .filter(Boolean);
+  const uniqueIds = [...new Set(ids)];
+  const has = (id) => uniqueIds.includes(id);
+  const toneId = uniqueIds.find((id) => id === 'gentle-tone' || id === 'direct-feedback') || null;
+  return {
+    ids: uniqueIds,
+    pacing: has('slower-pace') ? 'slow' : 'normal',
+    speechRate: has('slower-pace') ? 0.65 : 0.76,
+    maxSpokenWords: has('brevity') ? 24 : (has('slower-pace') ? 32 : 45),
+    maxCueCount: has('fewer-corrections') ? 1 : null,
+    correctionDensity: has('fewer-corrections') ? 'minimal' : 'normal',
+    cueStyle: has('concrete-over-imagery') ? 'concrete-physical' : 'adaptive',
+    preferredTone: toneId === 'direct-feedback'
+      ? 'direct, concise, respectful'
+      : toneId === 'gentle-tone'
+        ? 'gentle, patient, encouraging'
+        : 'warm, conversational, not technical',
+    doNotSay: has('concrete-over-imagery')
+      ? ['imagery', 'metaphor', 'imagine', 'picture it', 'visualize']
+      : [],
+  };
+}
+
+/**
+ * Build the LearnerMemo structured view + compact text lines from a learner
+ * snapshot (the object the runtime passes as `learnerContext`). Returns
+ * { lines: string[], text: string, fields: {...} }. Empty-safe: with no memo
+ * data the lines array is empty and text is ''.
+ */
+function buildLearnerMemo(learnerContext, options = {}) {
+  const ctx = learnerContext && typeof learnerContext === 'object' ? learnerContext : {};
+  // The memo fields can sit at the top level of the snapshot OR inside the
+  // nested learnerContext block — read whichever is present.
+  const nested = ctx.learnerContext && typeof ctx.learnerContext === 'object' ? ctx.learnerContext : {};
+  const profile = (ctx.profile && typeof ctx.profile === 'object' ? ctx.profile : null)
+    || (nested.profile && typeof nested.profile === 'object' ? nested.profile : {})
+    || {};
+  const lastReference = (ctx.lastReference && typeof ctx.lastReference === 'object' ? ctx.lastReference : null)
+    || (nested.lastReference && typeof nested.lastReference === 'object' ? nested.lastReference : {})
+    || {};
+  const whatWorked = Array.isArray(ctx.whatWorked) ? ctx.whatWorked
+    : (Array.isArray(nested.whatWorked) ? nested.whatWorked : []);
+  // v5 recall-wiring: identity moments + coaching preferences (top-level or nested).
+  // Captured by applyMemoryOps but never read into the memo before this.
+  const moments = Array.isArray(ctx.moments) ? ctx.moments
+    : (Array.isArray(nested.moments) ? nested.moments : []);
+  const coachPreferences = Array.isArray(ctx.coachPreferences) ? ctx.coachPreferences
+    : (Array.isArray(nested.coachPreferences) ? nested.coachPreferences : []);
+  // v6: what the learner finds HARD (voice.struggles) — read by the lesson planner
+  // but never by the COACH until now. The coach giving live feedback should know.
+  const struggles = Array.isArray(ctx.struggles) ? ctx.struggles
+    : (Array.isArray(nested.struggles) ? nested.struggles : []);
+  // v6: what to AVOID / what didn't work (top-level hoist, mirror of struggles).
+  const avoid = Array.isArray(ctx.avoid) ? ctx.avoid
+    : (Array.isArray(nested.avoid) ? nested.avoid : []);
+  // v5: review queue (so Wave-2B's SM-2/EWMA prioritization reaches the coach).
+  const reviewQueue = Array.isArray(ctx.reviewQueue) ? ctx.reviewQueue
+    : (Array.isArray(nested.reviewQueue) ? nested.reviewQueue : []);
+  // v4 sense-of-time inputs (top-level or nested).
+  const sessions = Array.isArray(ctx.sessions) ? ctx.sessions
+    : (Array.isArray(nested.sessions) ? nested.sessions : []);
+  const lastSessionAt = ctx.lastSessionAt != null ? ctx.lastSessionAt : nested.lastSessionAt;
+
+  const currentAxis = options.currentAxis || null;
+  const nowValue = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+
+  const displayName = memoStr(profile.displayName, 80);
+  const stage = memoStr(ctx.masteryLevel, 40);
+  const topics = memoList(profile.topics, 3, 40);
+  const hobbies = memoList(profile.hobbies, 3, 40); // v6: interests, for natural continuity
+  const pronouns = memoStr(profile.pronouns, 40);   // v6: HARD recall constraint (never misgender)
+  const goal = memoStr(profile.goal, 200);          // v6: target voice in the learner's own words
+  // v4: RELEVANCE-FIRST — wins matching the current focus axis come first, then
+  // newest. Falls back to newest-first when no axis is known.
+  const wins = selectWhatWorked(whatWorked, 3, currentAxis, 60);
+  const referenceName = memoStr(lastReference.name, 80);
+  // v4 sense-of-time: whole-day gap since the last session + the last 3 distinct
+  // focus axes (newest first). daysSinceLastSession is null when there's no log.
+  const daysSinceLastSession = daysBetween(lastSessionAt, nowValue);
+  const focusHistory = deriveFocusHistory(sessions, 3);
+  // v5: coaching preferences are standing directives the coach should honor; recent
+  // identity moments are capped at 2 (reference one warmly, never recite the file).
+  const coachPrefs = coachPreferences.slice(0, 3).map((p) => memoStr(p && p.text, 120)).filter(Boolean);
+  const coachPreferenceIds = [...new Set(coachPreferences
+    .map((p) => memoStr(p && (p.id || p.preferenceId), 80))
+    .filter(Boolean))];
+  // v6 SAFETY: NEVER recite a hard-moment. Surface only joy/milestone moments
+  // (joy-biased) for warm acknowledgement; flag a recent hard moment PRIVATELY so the
+  // coach softens tone without raising it (the kind tag was dropped before this).
+  // case-insensitive (defense-in-depth): a mis-cased 'Hard-Moment' can never be recited,
+  // even a hand-authored dataset moment that bypasses the store's kind-coercion.
+  const isHard = (m) => m && String(m.kind || '').toLowerCase() === 'hard-moment';
+  const isJoy = (m) => String(m.kind || '').toLowerCase() === 'gendered-right';
+  const recentHardMoment = moments.slice(0, 3).some(isHard);
+  const recitable = moments.filter((m) => m && !isHard(m));
+  const joyBiased = [
+    ...recitable.filter(isJoy),
+    ...recitable.filter((m) => !isJoy(m)),
+  ];
+  const recentMoments = joyBiased.slice(0, 2).map((m) => memoStr(m && m.text, 120)).filter(Boolean);
+  const reviewNext = reviewQueue.slice(0, 3).map((r) => memoStr(r && (r.name || r.conceptId), 60)).filter(Boolean);
+  // v6: struggles/avoid are strings (or {text}); cap 2; humanize concept-id slugs.
+  const humanize = (s) => memoStr((typeof s === 'string' ? s : (s && s.text) || '').replace(/_/g, ' '), 60);
+  const struggleList = struggles.slice(0, 2).map(humanize).filter(Boolean);
+  const avoidList = avoid.slice(0, 2).map(humanize).filter(Boolean);
+
+  // 2026-07-26: the learner's PRACTICE DIRECTION, resolved once here.
+  // Explicit profile direction always wins; otherwise the selected voice target
+  // supplies a hint (strict map — an unknown/ambiguous style yields nothing).
+  // Before this the direction was captured into `fields` but never rendered into
+  // `lines`, so the renderer's system prompt was ALWAYS in its "unsure of the
+  // learner's direction" branch.
+  const resolvedDirection = resolveCoachingDirection(ctx, options.targetPreset);
+
+  const fields = {
+    displayName,
+    pronouns,
+    direction: memoStr(profile.direction, 20),
+    practiceDirection: resolvedDirection.direction,
+    practiceDirectionSource: resolvedDirection.source,
+    goal,
+    stage,
+    topics,
+    hobbies,
+    whatWorked: wins,
+    struggles: struggleList,
+    avoid: avoidList,
+    referenceName,
+    daysSinceLastSession,
+    focusHistory,
+    coachPreferences: coachPrefs,
+    coachPreferenceIds,
+    recentMoments,
+    recentHardMoment,
+    reviewNext,
+  };
+
+  const lines = [];
+  // 2026-07-26: the memo TEXT no longer carries a Name line. `lines` is the only
+  // part of this memo the model ever sees — renderer-client renders
+  // personalization.learnerMemo === memo.text and never the fields object. So
+  // dropping the line here removes the learner's name from the model's context.
+  // The fields object is NOT dead: coaching/sanitizer.js stripLearnerVocative
+  // reads fields.displayName to guarantee the name is never SPOKEN even when it
+  // reaches the model by another route (the practice line, or model-authored
+  // memo free text). Keep writing it — the no-name contract depends on it. The name
+  // stays in `fields.displayName` below because the UI and the persistence layer
+  // both read it. Paired with the renderer's explicit no-name prohibition: the
+  // fine-tune addresses a learner by name whenever it is given one.
+  if (pronouns) lines.push(`Pronouns: ${pronouns}`);
+  if (resolvedDirection.direction) {
+    lines.push(resolvedDirection.source === 'target'
+      ? `Direction: ${resolvedDirection.direction} (from selected voice target)`
+      : `Direction: ${resolvedDirection.direction}`);
+  }
+  if (stage) lines.push(`Stage: ${stage}`);
+  if (topics.length) lines.push(`Topics: ${topics.join(', ')}`);
+  if (hobbies.length) lines.push(`Hobbies: ${hobbies.join(', ')}`);
+  if (goal) lines.push(`Goal: ${goal}`);
+  if (wins.length) lines.push(`What worked: ${wins.join('; ')}`);
+  if (struggleList.length) lines.push(`Struggles: ${struggleList.join('; ')}`);
+  if (avoidList.length) lines.push(`Avoid: ${avoidList.join('; ')}`);
+  if (coachPrefs.length) lines.push(`Coaching preferences: ${coachPrefs.join('; ')}`);
+  if (recentMoments.length) lines.push(`Recent moments: ${recentMoments.join('; ')}`);
+  if (recentHardMoment) lines.push('Sensitivity: a recent hard moment — be extra gentle and do not bring it up.');
+  if (reviewNext.length) lines.push(`Review next: ${reviewNext.join(', ')}`);
+  if (referenceName) lines.push(`Last target: ${referenceName}`);
+  // v4: a compact sense-of-time line (only when we actually have a prior session).
+  if (daysSinceLastSession != null) {
+    const dayWord = daysSinceLastSession === 1 ? 'day' : 'days';
+    lines.push(`Days since last session: ${daysSinceLastSession} ${dayWord}`);
+  }
+  if (focusHistory.length) lines.push(`Recent focus: ${focusHistory.join(', ')}`);
+
+  return {
+    lines,
+    text: lines.length ? `LearnerMemo\n${lines.join('\n')}` : '',
+    fields,
+  };
+}
+
+const COACH_ENTRY_POLICY = 'resume-core-practice';
+
+/**
+ * Compatibility response for the retired greeting endpoint.
+ *
+ * Coach entry is intentionally silent. TransVoice is a spoken lesson, not a
+ * messaging product, and Start means resume the checkpointed core exercise
+ * immediately. Continuity belongs in structured memory/state, never in an
+ * automatic welcome, warm-up, scope question, or thread message.
+ */
+function buildContinuityGreeting(learnerContext, options = {}) {
+  const nowValue = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const sessions = resolveSessionsRing(learnerContext);
+  const ringTier = resolveRingTierForDaypart(sessions, nowValue);
+  return {
+    line1: '',
+    line2: '',
+    scopeAsk: null,
+    tierDefault: ringTier,
+    lines: [],
+    text: '',
+    autoSpeak: false,
+    entryPolicy: COACH_ENTRY_POLICY,
+    witness: {
+      line2Branch: 'disabled-voice-only-entry',
+      scopeAsk: false,
+      scopeAskReason: null,
+    },
+  };
+}
+
+// v4: a warm, human description of a gap in days. >= 7 days rounds to weeks; the
+// odd-week remainder is dropped for a calm, non-precise phrasing ("about 3 weeks").
+function describeGap(days) {
+  const d = Math.max(0, Math.floor(Number(days) || 0));
+  if (d < 7) return d === 1 ? '1 day' : `${d} days`;
+  const weeks = Math.round(d / 7);
+  return weeks === 1 ? 'a week' : `${weeks} weeks`;
+}
+
+// ---------------------------------------------------------------------------
+// v2 decision blocks
+// ---------------------------------------------------------------------------
+
+/**
+ * The tilt value above which the PRODUCING analyzer already counts spectral tilt
+ * toward a strain verdict. NOT a number invented here: it is the zero-point of
+ * services/voice-trainer/src/services/audio_analysis.py's own
+ *   tilt_strain_term = clamp((spectral_tilt_mean + 10.0) / 8.0)
+ * so a tilt flatter than -10 dB/oct is the same evidence the DSP itself reads as
+ * effort. Flatter tilt = relatively more high-harmonic energy = pressed phonation.
+ */
+const PRESSED_TILT_FLAT_DB_PER_OCT = -10;
+
+/**
+ * How many pressedness correlates must fire before the composed verdict is allowed.
+ * Two, one of which is ALWAYS `strain_at_warn` (that term is mandatory, enforced
+ * separately in detectPitchPressureSignature — this constant only sets the total).
+ *
+ * Why a mandatory voice-derived term: audio_analysis.py refuses to emit strainRisk
+ * at all unless HNR or stability was measured on this take ("if (harmonic_strain_term
+ * is not None or stability_strain_term is not None)"), because "tilt and clipping are
+ * capture-chain properties, not vocal-effort measurements". So a non-null strainRisk
+ * IS the DSP's certificate that real voice-derived effort evidence exists, and
+ * requiring it is the only faithful way to mirror that rule here.
+ *
+ * Why a SECOND correlate on top: `strain_risk` already ships as its own issue at the
+ * same bar. The extra term is what makes this a PRESSURE finding rather than a
+ * restatement of "strained" — flat tilt is a pressed SPECTRUM, weight above band is
+ * the thyroarytenoid recruitment that pressing causes.
+ *
+ * Honest caveat, since the first version of this comment got it wrong: the correlates
+ * are NOT independent. `tilt_strain_term` is 25% of the strainRisk blend
+ * (audio_analysis.py), so tilt and strain share an input and corroborate rather than
+ * confirm. `weight_above_band` comes from a different pipeline and is independent of
+ * both. The mandatory term is the one that carries the effort evidence either way.
+ */
+const PRESSED_MIN_CORRELATES = 2;
+
+// ---------------------------------------------------------------------------
+// STYLE-ISSUE SEVERITY (added 2026-07-29)
+//
+// WHY THIS EXISTS. detectIssues ranks its findings by `confidence` and speaks the
+// top one. Before this block, that field was doing two incompatible jobs on two
+// incompatible scales:
+//   - resonance and weight carried a FLAT 0.7 — a fixed constant that could never
+//     rise no matter how far off the learner was;
+//   - the pitch family carried a MAGNITUDE that saturated almost immediately
+//     (`dip / 30` Hz).
+// A pre-training voice sits 60-90 Hz under a feminine floor, so the pitch term was
+// pinned at 1.0 on essentially every early take. 1.0 > 0.7 always, so resonance and
+// weight were STRUCTURALLY UNABLE to be the primary issue for the entire early
+// phase of training — not deprioritised, unreachable. That is the mechanism behind
+// the owner's "the tutor only ever talks about pitch", and it is a ranking artifact
+// rather than a coaching decision: the cue banks themselves are balanced
+// (section-loop.js SECTION_CUES is 4 pitch / 4 resonance / 4 weight).
+//
+// WHAT CHANGED. Every style issue is now scored as
+//     normalised severity  x  leverage prior  x  STYLE_CONFIDENCE_CEILING
+// where severity is |gap| / that axis's own expected spread. Same scale for every
+// axis, so the comparison is meaningful.
+//
+// WHAT DELIBERATELY DID NOT CHANGE. The safety-relevant confidences are untouched:
+// `pitch_pressed_in_band` keeps its documented 0.8 and the strain/breathy issues
+// keep carrying their raw risk. STYLE_CONFIDENCE_CEILING caps every style issue
+// strictly BELOW 0.8, so the ordering documented at the pitch_pressed_in_band push
+// ("above the single-axis weight/resonance issues, below a live strain verdict")
+// survives exactly.
+//
+// THE KNOCK-ON THIS CAUSED, AND HOW IT IS HANDLED. Scoring style honestly made
+// mildly-off style issues score BELOW a risk sitting on its firing bar, so
+// `strain_risk` at 0.52 started taking the primary spoken slot from findings that
+// used to beat it. That is unacceptable for a KNOWN-INVERTED metric, and it is
+// repaired at source by `riskConfidence` (see its comment) rather than by
+// re-inflating style scores — hiding one defect behind another is how the flat 0.7
+// got there in the first place. Every issue in this function is now on a
+// comparable scale: style in [0, 0.79], risks in [0, 1] with a dead zone at their
+// bar, and the composed `pitch_pressed_in_band` verdict fixed at 0.8 between them.
+// ---------------------------------------------------------------------------
+
+/**
+ * The gap at which an axis is considered FULLY off target. Severity is
+ * |gap| / spread, clamped to 1.
+ */
+const SEVERITY_SPREAD = Object.freeze({
+  // 0-1 score units. Derived from the built-in preset resonance floors, which are
+  // {0.20, 0.24, 0.28, 0.32, 0.34, 0.38} (audio_analysis.py TARGET_PROFILES) — a
+  // span of exactly 0.38 - 0.20 = 0.18. So "fully off target" is defined as being
+  // a whole preset-spread away from your own band edge.
+  // NOT a masculine-to-feminine traverse: the engine's reference points are F2
+  // ~1380 Hz masculine (~0.14) vs ~1690 Hz feminine (~0.49), and that traverse is
+  // 0.35 — an earlier version of this comment cited those two numbers and then
+  // wrongly called their difference 0.18.
+  resonance: 0.18,
+  // No independent derivation — carried across from resonance because both axes
+  // are 0-1 scores on comparably scaled bands. Flagged rather than dressed up: if
+  // weight coaching feels mis-ranked, this is the first constant to re-derive.
+  weight: 0.18,
+  // SEMITONES, not Hz. ~6 st is roughly a full untrained-to-target journey
+  // (120 Hz -> 168 Hz is 5.8 st), so this term now falls as the learner improves
+  // instead of sitting pinned at 1.0 for months.
+  pitchSt: 6,
+  // Unchanged from the previous inline divisors.
+  pitchStdSt: 3,
+  tunnelHoldPct: 30,
+  tiltDbPerOct: 8,
+});
+
+/**
+ * Leverage prior from the B1-B9 research dossier's ranking of PERCEPTUAL IMPACT
+ * for MtF voice: (1) sentence-ending melody, (2) buzz forward / mouth shape,
+ * (3) light voice, (4) pitch, (5) breathy edge. The dossier is emphatic that
+ * "pitch alone fails" and that the forward buzz is "usually the BIGGEST
+ * perceptual shift for listeners - bigger than the higher note alone", so pitch
+ * must be materially further off than resonance before it takes the turn.
+ */
+const AXIS_LEVERAGE = Object.freeze({
+  melody: 1.0,
+  resonance: 1.0,
+  weight: 0.8,
+  pitch: 0.55,
+});
+
+/** Keeps every style issue strictly below pitch_pressed_in_band's 0.8. */
+const STYLE_CONFIDENCE_CEILING = 0.79;
+
+/** Risk level treated as maximal by riskConfidence — see its comment. */
+const RISK_SATURATION = 0.95;
+
+/**
+ * Normalised confidence for a RISK issue (strain, breathy).
+ *
+ * WHY THIS EXISTS — a regression the severity rework caused and this repairs.
+ * The risks carried their RAW value as confidence (`Math.min(1, strainRisk)`).
+ * That was survivable while style issues sat at a flat 0.7, because a risk sitting
+ * exactly on its firing bar (0.52 for strain) lost to them. Once style issues were
+ * scored honestly by magnitude, a mildly-off style axis dropped BELOW 0.52 — so a
+ * risk that had only just crossed its bar started taking the primary spoken slot.
+ * Measured before/after on identical fixtures:
+ *   p10 60 Hz under floor, resonance+weight in band, strainRisk 0.52
+ *     -> was `pitch_floor_under_target`, became `strain_risk`
+ *   resonance 0.10 under floor, strainRisk 0.52
+ *     -> was `resonance_slightly_back`, became `strain_risk`
+ * That is exactly what must not happen: `strainRisk` is a KNOWN-INVERTED metric
+ * (650-clip calibration — clean voices read 0.40-0.51, severely strained voices
+ * read 0.05-0.11), so a reading at its bar may be describing a CLEAN voice, and
+ * promoting it to the thing the tutor says is a real coaching regression.
+ *
+ * THE FIX — a dead zone at the firing bar. A risk that has only just crossed its
+ * threshold now carries ~0 confidence, rising to 1.0 at maximum risk. Crossing a
+ * bar means "report this", not "this is the most important thing about the take".
+ * The scale stays [0,1] rather than the style band, so a genuinely high risk can
+ * still outrank the composed verdict at 0.8 — the documented safety ordering is
+ * untouched at the top end and only the bottom end, where the regression was,
+ * moves.
+ *
+ * WHY THE RAMP SATURATES BELOW 1.0. Three constraints have to hold at once, and a
+ * straight [bar -> 1.0] ramp satisfies only the first two:
+ *   - at the bar, confidence ~0        (kills the regression above)
+ *   - strain 0.60 must stay BELOW a weight issue 0.10 over its ceiling (0.35)
+ *     — the ordering signal-builder.pitch-pressure.test.js has always asserted
+ *   - strain 0.90 must still BEAT the composed verdict's fixed 0.8, which that
+ *     same suite asserts as a deliberate safety decision ("so the coach addresses
+ *     strain directly")
+ * A [0.52 -> 1.0] ramp puts 0.90 at 0.792 and silently reverses that third rule.
+ *
+ * THE CONSTRAINTS FORCE A RANGE, NOT A POINT. Measured by sweeping this constant
+ * against both affected suites: 0.70 fails one test, 1.00 fails one test, and
+ * every value between roughly 0.75 and 0.99 passes both. 0.95 is a CHOICE inside
+ * that band, taken for headroom at the top end — it is not derived. Do not attach
+ * a false precision to it; if a constraint changes, re-sweep rather than reasoning
+ * from the number.
+ *
+ * (An earlier version of this comment claimed the strain composite has a measured
+ * search ceiling of ~0.663 and that 0.95 was therefore beyond reachable. That is
+ * FALSE for this engine — the figure came from a vendored snapshot elsewhere in
+ * the estate. Verified against the live code: every term is clamped into [0,1] and
+ * `_blend_available_terms` renormalises the surviving weights to sum 1, so
+ * strainRisk genuinely reaches 1.0, including when only the HNR term is
+ * measurable. The claim was also self-defeating — a real 0.663 ceiling would put
+ * riskConfidence at 0.333 and make the third constraint above unreachable.)
+ *
+ * NOTE this is the coaching TOPIC, not the safety interlock. The actual safety
+ * gate is separate (safety-gates.js); a lone strain warn without recent strikes
+ * stays `normal` there regardless of what this returns.
+ */
+function riskConfidence(risk, warnBar) {
+  if (!Number.isFinite(risk)) return 0;
+  const bar = Number.isFinite(warnBar) ? warnBar : 0;
+  const headroom = RISK_SATURATION - bar;
+  if (headroom <= 0) return clamp(risk, 0, 1);
+  return clamp((risk - bar) / headroom, 0, 1);
+}
+
+/**
+ * Normalised confidence for a style (non-safety) issue.
+ * Returns 0 for a missing/unmeasurable gap so the issue sorts last rather than
+ * inheriting a rank it did not earn.
+ */
+function styleConfidence(gap, spread, leverage) {
+  if (!Number.isFinite(gap) || !Number.isFinite(spread) || spread <= 0) return 0;
+  const severity = clamp(Math.abs(gap) / spread, 0, 1);
+  return clamp(severity * leverage, 0, 1) * STYLE_CONFIDENCE_CEILING;
+}
+
+/**
+ * Detect the PRESSED-INTO-BAND signature: a pitch reading that sits inside the
+ * target band because the learner PUSHED AIR, not because the larynx changed
+ * setting.
+ *
+ * WHY THIS EXISTS. F0 rises 2-6 Hz per cmH2O of subglottal pressure, and doubling
+ * that pressure also adds ~9-11 dB SPL (Titze 1989, via
+ * studio/research/mtf-voice-body-atlas-2026-07-27.md 2.2 and 2.6). So a learner can
+ * land inside the pitch band by pressing, and a FREQUENCY-ONLY scorer reads that as
+ * on target. Vocal loading also raises F0 across a session, returning to baseline
+ * only after ~5 min rest — so the false green appears exactly when the learner is
+ * fatiguing. Scoring pitch in isolation therefore rewards the single habit most
+ * likely to injure the user; the atlas states the rule directly: "Pitch must not be
+ * scorable as a pass in isolation."
+ *
+ * WHAT IS MEASURED — each correlate fires only when ITS OWN input is present, and
+ * every bar is one that already exists in this system:
+ *   strain_at_warn       MANDATORY. strainRisk >= the canonical strain WARN bar
+ *                        resolved by resolveStrainThresholds (safety-thresholds.js:
+ *                        contract fallback 0.52, profile-capped at ceiling+0.10,
+ *                        lenient for vocalise kinds) — the SAME bar detectIssues
+ *                        already uses for the strain_risk issue. Inadmissible for a
+ *                        take kind whose KIND_SUPPRESSED_ISSUES entry calls a strain
+ *                        reading a lie (a trill is SUPPOSED to wobble): if this
+ *                        module will not report that number as strain, it will not
+ *                        consume it as pressure evidence either.
+ *   spectral_tilt_flat   spectralTilt > PRESSED_TILT_FLAT_DB_PER_OCT (see above),
+ *                        excluding an exact 0. audio_analysis.py returns 0.0 both
+ *                        when the tilt line cannot be fitted and as the mean's
+ *                        default when no frame carries a payload, and it surfaces
+ *                        that value ungated even where it gates the strain INPUT on
+ *                        has_voiced_evidence. 0.0 > -10, so an absent tilt would
+ *                        otherwise read as "flat". A missing measurement must never
+ *                        become evidence, so exactly 0 is treated as absent. The
+ *                        residual cost is real but small: a GENUINE reading that
+ *                        rounds to 0.000 (the DSP rounds to 3 dp) is discarded too.
+ *                        Voiced speech tilt is strongly negative, so that reading is
+ *                        rare, and this correlate can never carry the verdict alone.
+ *
+ * WHAT `correlates` CANNOT TELL YOU: a missing 'strain_at_warn' means the strain was
+ * below the bar, absent, OR inadmissible for the take kind — the array does not
+ * distinguish them. Nothing consumes it today; a future consumer that needs the
+ * difference must be given it explicitly rather than inferring it from the omission.
+ *   weight_above_band    weightMean > the profile's own weightCeiling, the band
+ *                        already in the metric contract. Pressing recruits
+ *                        thyroarytenoid, which re-adds vocal weight (atlas 2.2/2.3).
+ *
+ * LOUDNESS IS DELIBERATELY ABSENT — see the note on buildSignal's pitchPressure
+ * block for what would be needed to add it.
+ *
+ * MEASURED BEHAVIOUR of this function: `signature` is true only when the pitch status
+ * is exactly 'in_band' AND `strain_at_warn` fired AND the total correlate count
+ * reached PRESSED_MIN_CORRELATES. It is therefore false for every other status
+ * (including 'unstable' and 'uncertain'), false whenever strainRisk is missing,
+ * below the bar, or inadmissible for the take kind, and false when tilt and weight
+ * fire without it. It never mutates the pitch status and never suppresses anything
+ * on its own. `correlates` reports what fired even when the signature did not.
+ */
+function detectPitchPressureSignature({
+  pitchStatus,
+  spectralTilt = null,
+  strainRisk = null,
+  strainWarnBar = null,
+  weightMean = null,
+  weightCeiling = null,
+  strainAdmissible = true,
+}) {
+  const correlates = [];
+  const strainFired = strainAdmissible === true
+    && strainRisk != null && strainWarnBar != null && strainRisk >= strainWarnBar;
+  if (strainFired) {
+    correlates.push('strain_at_warn');
+  }
+  if (spectralTilt != null && spectralTilt !== 0 && spectralTilt > PRESSED_TILT_FLAT_DB_PER_OCT) {
+    correlates.push('spectral_tilt_flat');
+  }
+  if (weightMean != null && weightCeiling != null && weightMean > weightCeiling) {
+    correlates.push('weight_above_band');
+  }
+  return {
+    signature: pitchStatus === 'in_band'
+      && strainFired
+      && correlates.length >= PRESSED_MIN_CORRELATES,
+    correlates,
+  };
+}
+
+/**
+ * Build targetFit from raw metrics + target bands.
+ * Returns { pitch, resonance, weight } blocks with discrete status + evidence.
+ *
+ * `options.takeKind` (optional), used for two things and nothing else: it resolves
+ * the strain WARN bar with the same vocalise lenience the safety gate applies, and
+ * it decides whether a strain reading is admissible as pressure evidence at all
+ * (KIND_SUPPRESSED_ISSUES). Omitting it resolves the standard bar and admits strain.
+ */
+function buildTargetFit(voiceState, summary, advanced, quality, targetProfile, options = {}) {
+  const contract = resolveMetricContract(voiceState, summary);
+  const resolvedAdvanced = isRecord(advanced) ? advanced : contract.advanced;
+  const measurementUsable = resolveVoiceMeasurementUsability(resolvedAdvanced).usableForScoring;
+  const meanPitch = contract.values.meanPitchHz;
+  const p10 = toFiniteOrNull(resolvedAdvanced.pitchP10Hz);
+  const p90 = toFiniteOrNull(resolvedAdvanced.pitchP90Hz);
+  const pitchStdSt = toFiniteOrNull(resolvedAdvanced.pitchStdSt);
+  const resonanceMean = contract.values.resonanceMean;
+  const weightMean = contract.values.weightMean;
+  const bandFloorHz = contract.target.pitchFloorHz;
+  const bandCeilingHz = contract.target.pitchCeilingHz;
+  const stdCeiling = toFiniteOrNull(targetProfile?.advancedBands?.pitchStdStCeiling);
+
+  if (!measurementUsable || !contract.hasTargetContract) {
+    return {
+      pitch: {
+        status: 'uncertain', medianHz: null, semitoneDeltaToTargetCenter: null,
+        percentInBand: null, bandFloorHz, bandCeilingHz,
+        successSuppressed: false, suppressionReason: null, pressureCorrelates: [],
+      },
+      resonance: { status: 'uncertain', evidence: 'Resonance not measured this turn.' },
+      weight: { status: 'uncertain', evidence: 'Voice weight not measured this turn.' },
+    };
+  }
+
+  // ----- Pitch status -----
+  let pitchStatus = 'uncertain';
+  let semitoneDelta = null;
+  let percentInBand = null;
+
+  const embeddedPlacement = summary?.target?.pitchPlacement;
+  if (['below', 'in_band', 'above'].includes(embeddedPlacement)) {
+    pitchStatus = embeddedPlacement;
+  } else if (meanPitch != null && bandFloorHz != null && bandCeilingHz != null) {
+    const midBand = (bandFloorHz + bandCeilingHz) / 2.0;
+    semitoneDelta = hzToSemitones(meanPitch, midBand);
+    pitchStatus = meanPitch < bandFloorHz
+      ? 'below'
+      : meanPitch > bandCeilingHz ? 'above' : 'in_band';
+  }
+
+  // If we have a stability ceiling and pitch is wildly spread, mark unstable
+  if (pitchStdSt != null && stdCeiling != null && pitchStdSt > stdCeiling + 1.0) {
+    pitchStatus = 'unstable';
+  }
+
+  // ----- Pressed-into-band composition -----
+  // Runs AFTER the stability override on purpose: 'unstable' is already not a pass,
+  // and the override keeps its exact previous meaning and precedence. This block
+  // only ever describes an 'in_band' reading; it never rewrites pitchStatus.
+  const pressureTakeKind = options && typeof options.takeKind === 'string' ? options.takeKind : null;
+  // Single source of truth for "is a strain number honest for this take kind" — the
+  // same table detectIssues filters the issue list with. `'*'` suppresses everything.
+  const kindSuppressed = pressureTakeKind ? KIND_SUPPRESSED_ISSUES[pressureTakeKind] : null;
+  const pitchPressure = detectPitchPressureSignature({
+    pitchStatus,
+    spectralTilt: toFiniteOrNull(resolvedAdvanced.spectralTiltMeanDbPerOct),
+    strainRisk: toFiniteOrNull((isRecord(quality) ? quality : {}).strainRisk),
+    strainWarnBar: resolveStrainThresholds(
+      targetProfile?.advancedBands?.quality || {},
+      { takeKind: pressureTakeKind },
+    ).warn,
+    strainAdmissible: !(kindSuppressed === '*'
+      || (Array.isArray(kindSuppressed) && kindSuppressed.includes('strain_risk'))),
+    weightMean,
+    weightCeiling: contract.target.weightCeiling,
+  });
+
+  const measuredOccupancy = toFiniteOrNull(resolvedAdvanced.pitchTargetOccupancyPct);
+  if (measuredOccupancy != null) {
+    percentInBand = clamp(measuredOccupancy, 0, 100);
+  } else if (p10 != null && p90 != null && bandFloorHz != null && bandCeilingHz != null) {
+    // If P10 is below floor, the lower edge is out of band.
+    // If P90 is above ceiling, the upper edge is out of band.
+    // We treat in-band as P10 >= floor AND P90 <= ceiling; otherwise estimate.
+    if (p10 >= bandFloorHz && p90 <= bandCeilingHz) {
+      percentInBand = 100;
+    } else {
+      // Penalize symmetrically
+      const lowPenalty = bandFloorHz ? Math.max(0, (bandFloorHz - p10) / 20.0) : 0;
+      const highPenalty = bandCeilingHz ? Math.max(0, (p90 - bandCeilingHz) / 20.0) : 0;
+      percentInBand = Math.max(0, Math.min(100, 100 - (lowPenalty + highPenalty) * 50));
+    }
+  }
+
+  // Recompute semitone delta vs band center for reporting
+  if (semitoneDelta == null && meanPitch != null && bandFloorHz != null && bandCeilingHz != null) {
+    semitoneDelta = hzToSemitones(meanPitch, (bandFloorHz + bandCeilingHz) / 2.0);
+  }
+
+  // ----- Resonance status -----
+  let resonanceStatus = 'uncertain';
+  let resonanceEvidence = '';
+  let resonanceGap = null;
+  const resonanceFloor = contract.target.resonanceFloor;
+  const resonanceCeiling = contract.target.resonanceCeiling;
+  if (resonanceMean != null && resonanceFloor != null && resonanceCeiling != null) {
+    const display = Math.round(resonanceMean * 100);
+    if (resonanceMean < resonanceFloor) {
+      resonanceStatus = 'too_dark';
+      resonanceGap = resonanceMean - resonanceFloor;
+      resonanceEvidence = `Resonance ${display}% — below target band ${Math.round(resonanceFloor * 100)}–${Math.round(resonanceCeiling * 100)}%.`;
+    } else if (resonanceMean > resonanceCeiling) {
+      resonanceStatus = 'too_bright';
+      resonanceGap = resonanceMean - resonanceCeiling;
+      resonanceEvidence = `Resonance ${display}% — above target band ${Math.round(resonanceFloor * 100)}–${Math.round(resonanceCeiling * 100)}%.`;
+    } else {
+      resonanceStatus = 'target';
+      resonanceGap = 0;
+      resonanceEvidence = `Resonance ${display}% in target zone.`;
+    }
+  } else {
+    resonanceEvidence = 'Resonance not measured this turn.';
+  }
+
+  // ----- Weight status -----
+  let weightStatus = 'uncertain';
+  let weightEvidence = '';
+  let weightGap = null;
+  const weightFloor = contract.target.weightFloor;
+  const weightCeiling = contract.target.weightCeiling;
+  if (weightMean != null && weightFloor != null && weightCeiling != null) {
+    const display = Math.round(weightMean * 100);
+    if (weightMean < weightFloor) {
+      weightStatus = 'too_light';
+      weightGap = weightMean - weightFloor;
+      weightEvidence = `Voice weight ${display}% — below target band ${Math.round(weightFloor * 100)}–${Math.round(weightCeiling * 100)}%.`;
+    } else if (weightMean > weightCeiling) {
+      weightStatus = 'too_heavy';
+      weightGap = weightMean - weightCeiling;
+      weightEvidence = `Voice weight ${display}% — above target band ${Math.round(weightFloor * 100)}–${Math.round(weightCeiling * 100)}%.`;
+    } else {
+      weightStatus = 'target';
+      weightGap = 0;
+      weightEvidence = `Voice weight ${display}% in target zone.`;
+    }
+  } else {
+    weightEvidence = 'Voice weight not measured this turn.';
+  }
+
+  return {
+    pitch: {
+      status: pitchStatus,
+      medianHz: meanPitch,
+      semitoneDeltaToTargetCenter: semitoneDelta != null ? Math.round(semitoneDelta * 10) / 10 : null,
+      percentInBand: percentInBand != null ? Math.round(percentInBand) : null,
+      bandFloorHz,
+      bandCeilingHz,
+      // READ BEFORE CONSUMING. These three keys never reach the SIGNAL:
+      // signal-schema.js's buildCoachingSignal rebuilds targetFit from six named
+      // pitch keys with no `...overrides.targetFit` spread, and buildSignal routes
+      // targetFit through it, so every consumer downstream of the signal is blind
+      // to them. They ARE visible to a direct caller of the exported buildTargetFit
+      // — today that is backend/lessons/lesson-planner.js:352, which reads only
+      // .weight.status and .resonance.status and is unaffected.
+      // The pitch `status` deliberately stays inside the shipped PITCH_STATUSES enum
+      // (signal-schema.js) that isValidCoachingSignal and the frontend's
+      // getPitchFitStatusLabel both switch on.
+      // The verdict reaches consumers by two routes that DO survive: the
+      // `pitch_pressed_in_band` issue (-> observation.primaryIssue /
+      // plainEvidence / coachingDecision) and the additive top-level
+      // signal.pitchPressure block attached in buildSignal.
+      successSuppressed: pitchPressure.signature,
+      suppressionReason: pitchPressure.signature ? 'pressure_signature' : null,
+      pressureCorrelates: pitchPressure.correlates,
+    },
+    resonance: {
+      status: resonanceStatus,
+      evidence: resonanceEvidence,
+      // Signed distance OUTSIDE the target band, in the metric's own 0-1 units;
+      // 0 when in band, null when unmeasured. Added 2026-07-29 so detectIssues can
+      // score this axis by magnitude instead of the flat 0.7 it used to carry (see
+      // SEVERITY_SPREAD). Negative = below floor (too dark), positive = above
+      // ceiling (too bright). Like the pitch keys above, this does NOT survive
+      // signal-schema.js's rebuild — it is consumed inside this module only.
+      gap: resonanceGap,
+    },
+    weight: {
+      status: weightStatus,
+      evidence: weightEvidence,
+      // Same contract as resonance.gap above: signed distance outside the band in
+      // 0-1 weight units, 0 in band, null unmeasured. Negative = below floor (too
+      // light), positive = above ceiling (too heavy).
+      gap: weightGap,
+    },
+  };
+}
+
+/**
+ * Map a primaryIssue to a coachingDecision.primaryFocus axis.
+ */
+function primaryIssueToFocus(primaryIssue) {
+  if (!primaryIssue) return 'none';
+  const map = {
+    voice_weight_heavy: 'vocal_weight',
+    voice_weight_light: 'vocal_weight',
+    resonance_slightly_back: 'resonance_forward',
+    resonance_too_forward: 'resonance_forward',
+    phrase_ending_instability: 'phrase_ending',
+    pitch_falling_at_end: 'phrase_ending',
+    // The note is already in the band, so the correction is NOT a pitch move —
+    // it is removing the effort that put it there. 'strain_reduction' is the
+    // existing FOCUS_AXES member (signal-schema.js) for exactly that, and it
+    // already carries a drill and success criteria in this file.
+    pitch_pressed_in_band: 'strain_reduction',
+    breathy_quality: 'tone_clarity',
+    strain_risk: 'strain_reduction',
+    spectral_tilt_dark: 'resonance_forward',
+    pitch_floor_under_target: 'pitch_floor',
+    pitch_above_target: 'pitch_lower',
+    pitch_unstable: 'pitch_stability',
+  };
+  return map[primaryIssue] || 'none';
+}
+
+/**
+ * Build a one-line reason for the chosen focus axis.
+ * Uses plainEvidence if available, else a derived reason.
+ */
+function buildDecisionReason(primaryIssue, focus, evidence, targetFit, history) {
+  if (!primaryIssue || focus === 'none') {
+    return '';
+  }
+  if (evidence) {
+    return evidence;
+  }
+  if (focus === 'pitch_floor') {
+    return 'How low the voice dips is going below the target.';
+  }
+  if (focus === 'pitch_lower') {
+    return 'Pitch is sitting above the target — let it settle lower.';
+  }
+  if (focus === 'pitch_stability') {
+    return 'The pitch is wobbling more than the target allows.';
+  }
+  if (focus === 'phrase_ending') {
+    return 'Phrase ending is dropping or wavering.';
+  }
+  if (focus === 'vocal_weight') {
+    return targetFit.weight.status === 'too_heavy'
+      ? 'The sound is heavier than the target — more rumble than it needs.'
+      : 'The sound has less rumble than the target needs.';
+  }
+  if (focus === 'resonance_forward') {
+    return targetFit.resonance.status === 'too_dark'
+      ? 'The tongue is sitting too far back — the mouth shape needs to come forward.'
+      : 'The tongue is further forward than the target needs.';
+  }
+  if (focus === 'tone_clarity') {
+    return 'Airy tone — start the word on a tiny, gentle "uh" so the start of each word is clean.';
+  }
+  if (focus === 'strain_reduction') {
+    return 'The voice sounds strained — ease off slightly.';
+  }
+  if (focus === 'speech_rate') {
+    return 'The words are coming out faster than the target.';
+  }
+  // 2026-07-26: was 'One focus at a time — keep it easy and target-aligned.' —
+  // a state with no action in it, then 'One steady placement across the whole
+  // line' — an action with no BODY in it. The fallback now names articulators.
+  return 'Keep the tongue and lips in one setting from the first word to the last.';
+}
+
+/**
+ * Recommend a drill for the given focus + practice line.
+ * Returns a full { id, instruction, successCriteria } object.
+ * The model phrases the instruction; the successCriteria names something the
+ * learner can HEAR OR FEEL on the attempt she just made.
+ *
+ * 2026-07-30 VERIFIABILITY PASS. These criteria used to be phrased as invisible
+ * measurements — "How low the voice dips stays at or above the target", "The
+ * sound lands where the selected voice sits". This is an eyes-free product:
+ * there is no number on screen, so a check she cannot perform is not a check.
+ * Every criterion here must name an audible event (a word rises, a word does
+ * not drop away) or a palpable one (tongue sides on the back teeth, the buzz
+ * under a palm). Never a band, a target, or a preset match.
+ *
+ * Drill selection is intentionally minimal at this stage — a richer router will
+ * arrive with Phase 1.10 (drill registry). For now we map focus to a small set
+ * of well-known starter cues.
+ */
+function recommendDrillForFocus(focus, practiceLine, drillRegistry, targetFit) {
+  if (!focus || focus === 'none') {
+    return {
+      id: null,
+      instruction: '',
+      successCriteria: '',
+      contraindications: [],
+      difficulty: null,
+    };
+  }
+  const resonanceStatus = targetFit?.resonance?.status || null;
+  const weightStatus = targetFit?.weight?.status || null;
+  // Optional lookup against the drill registry if provided.
+  if (drillRegistry && typeof drillRegistry.select === 'function') {
+    const pick = drillRegistry.select({ focus, practiceLine, resonanceStatus, weightStatus });
+    if (pick) {
+      return {
+        id: pick.id,
+        instruction: pick.instruction || pick.title || '',
+        successCriteria: pick.successCriteria || '',
+        contraindications: Array.isArray(pick.contraindications) ? pick.contraindications : [],
+        difficulty: pick.difficulty || null,
+      };
+    }
+  }
+
+  // Built-in default — minimal fallback when no registry is available.
+  // 2026-07-26: rewritten into the ARTICULATORY register the renderer was
+  // fine-tuned on (tongue / lips / jaw / soft-palate actions), replacing the
+  // state-and-imagery wording ("let the first word bloom in", "think of the last
+  // few words going slightly up"). Closure wording stays GENTLE by law — a tiny
+  // "uh" catch, never pressing or forcing — and no cue names larynx height
+  // directly.
+  const defaults = {
+    pitch_floor: {
+      id: 'starter-light-lift',
+      instruction: 'Start on a small "mm" hum with the lips lightly together, then open the jaw into the words without letting the pitch fall back down.',
+      successCriteria: 'The line stays up where the hum started it instead of sliding back down.',
+    },
+    pitch_lower: {
+      id: 'starter-settle-low',
+      instruction: 'Let the jaw hang looser and start the line on an easy, low "uh", keeping the tongue flat and relaxed through the words.',
+      successCriteria: 'The line settles low with no push behind it.',
+    },
+    pitch_stability: {
+      id: 'starter-stable-onenote',
+      instruction: 'Hold the first vowel of the line on one comfortable note for 2 seconds with the jaw still, then continue.',
+      successCriteria: 'The held vowel stays on one steady note.',
+    },
+    resonance_forward: {
+      id: 'starter-nasal-buzz',
+      instruction: 'Hum the line on "m" or "n" first and feel the buzz on your lips and behind your top teeth, then open into the words and keep the buzz there.',
+      successCriteria: 'The buzz stays on your lips and behind your top teeth all the way through, with no throat tightness.',
+    },
+    vocal_weight: {
+      id: 'starter-light-onset',
+      instruction: 'Keep the jaw loose and the tongue light, and begin the first word softly instead of pressing into it.',
+      successCriteria: 'Each word starts soft, with no push behind the first one.',
+    },
+    tone_clarity: {
+      id: 'starter-clean-onset',
+      instruction: 'Start the first word with a tiny, gentle "uh" — the small catch just before a cough — then keep that clean contact through the line.',
+      successCriteria: 'The tone reads clear rather than airy, with no pressing.',
+    },
+    strain_reduction: {
+      id: 'starter-easy-hum',
+      instruction: 'Let the jaw and tongue go loose and hum quietly on "mm" with no push at all.',
+      successCriteria: 'The voice feels easy and unstrained after the hum.',
+    },
+    speech_rate: {
+      id: 'starter-slowdown',
+      instruction: 'Say the line at half speed, and let the jaw finish each vowel before the next word starts.',
+      successCriteria: 'Each word finishes before the next one starts, and the melody stays alive.',
+    },
+    phrase_ending: {
+      id: 'starter-lift-end',
+      // DIRECTION-NEUTRAL by law: phrase_ending has no direction variant, so it
+      // must not name a RISE. Historically (pre-MTF-only) a rising ending was a
+      // feminizing device the cross-direction stripper deleted for a
+      // masculinizing learner, leaving the turn with no action; measured, the
+      // 90ab6f5 wording was cut for BOTH directions. The wording stays as-is:
+      // "does not fall away" is still the truer instruction, and a neutral-target
+      // learner still has no direction to be pushed in.
+      instruction: 'Keep the lips and jaw moving right through the last two words so the ending does not fall away.',
+      successCriteria: 'Listen to the last word — it should not drop away below the rest of the sentence.',
+    },
+  };
+  // OVERSHOOT technique for the two-sided timbre axes. NOT a gender-direction
+  // branch — `too_bright` / `too_light` are TARGET-RELATIVE status values: the
+  // learner has gone PAST their own selected band, so the drill must bring them
+  // back. This is load-bearing for the surviving feminizing path and MUST NOT be
+  // removed with the masculinizing direction (verified 2026-07-26: a feminine
+  // target has a resonance ceiling and a weight floor of its own).
+  if (resonanceStatus === 'too_bright') {
+    defaults.resonance_forward = {
+      id: 'starter-settle-back',
+      // 2026-07-26: PRE-EXISTING defect fixed here. This cue corrects an
+      // OVERSHOOT — the learner has gone past their own target toward bright —
+      // so it is correct for a feminizing learner. But phrasing the correction
+      // as added darkness ("sits fuller and rounder", the wording at 90ab6f5)
+      // read to the cross-direction stripper as a masculinizing cue, so it was
+      // DELETED for exactly the feminizing learners it was written for, and they
+      // got the generic fallback instead. Phrasing it as coming BACK to the
+      // selected voice survives both directions and is the truer instruction.
+      instruction: 'Open a little more space at the back of the mouth — a small yawn feeling — and let the line settle back toward the selected voice.',
+      successCriteria: 'The tongue sits lower through the line and the sound stays clear, not muffled.',
+    };
+  }
+  if (weightStatus === 'too_light') {
+    defaults.vocal_weight = {
+      id: 'starter-grounded-onset',
+      instruction: 'Let the jaw open a touch more and start the first word on firmer contact, so it carries a little more chest.',
+      successCriteria: 'The buzz under your palm gets a little stronger, with no push behind it.',
+    };
+  }
+  // 2026-07-26: NO silent phrase_ending fallback.
+  //
+  // The old `defaults[focus] || defaults.phrase_ending` turned every unmapped
+  // focus into the phrase-ending drill — the exact cue the fine-tuned renderer
+  // already over-produces, so a focus with no drill material looked identical
+  // to a genuine phrase-ending decision. An unmapped focus now produces NO
+  // drill material at all: the renderer's decisionIsActionable path prints
+  // Drill/Win lines only when they are non-empty, so the turn degrades to
+  // Focus + Reason instead of a wrong, confidently-stated drill.
+  const def = defaults[focus];
+  if (!def) {
+    emitCoachWitness({
+      event: 'coach_focus_unmapped',
+      focus,
+      surface: 'recommendDrillForFocus',
+      practice_line_present: Boolean(practiceLine),
+    });
+    return {
+      id: null,
+      instruction: '',
+      successCriteria: '',
+      contraindications: [],
+      difficulty: null,
+    };
+  }
+  // If we have a practice line, fold the last 2–3 words into the instruction hint
+  if (practiceLine) {
+    const words = practiceLine.split(/\s+/).filter(Boolean);
+    if (words.length > 2) {
+      const tail = words.slice(-3).join(' ');
+      def.instruction = `${def.instruction} Focus the last words: "${tail}…"`;
+    }
+  }
+  return def;
+}
+
+// 2026-07-29 L3 (TTS latency): every starter drill instruction the direct
+// composer can speak, resolved through recommendDrillForFocus itself so this
+// list can never drift from the drill the turn would actually get. No practice
+// line (so no tail splice) and no target fit (so the base defaults).
+const STARTER_DRILL_FOCUS_AXES = [
+  'pitch_floor',
+  'pitch_lower',
+  'pitch_stability',
+  'resonance_forward',
+  'vocal_weight',
+  'tone_clarity',
+  'strain_reduction',
+  'speech_rate',
+  'phrase_ending',
+];
+
+function listStarterDrillInstructions() {
+  return STARTER_DRILL_FOCUS_AXES
+    .map((focus) => recommendDrillForFocus(focus, '', null, null)?.instruction)
+    .filter((text) => typeof text === 'string' && text.trim());
+}
+
+/**
+ * Avoid cues for the given focus + safety + contraindications.
+ * Returned as an array of short phrases the model should NOT use.
+ */
+function buildAvoidCues(focus, safety, drillContraindications) {
+  const cues = [];
+  if (safety?.state === 'stop' || safety?.state === 'fatigue_or_strain') {
+    cues.push('push', 'try harder', 'go higher', 'more intensity');
+  }
+  if (drillContraindications && Array.isArray(drillContraindications)) {
+    for (const c of drillContraindications) {
+      if (typeof c === 'string') cues.push(c);
+    }
+  }
+  return [...new Set(cues)];
+}
+
+/**
+ * Build successCriteria for the chosen focus.
+ * Each entry is a short measurable phrase.
+ */
+function buildSuccessCriteria(focus, targetFit) {
+  if (!focus || focus === 'none') return [];
+  switch (focus) {
+    case 'pitch_floor':
+      return [
+        'The line does not slide back down below where it started.',
+        'No audible strain on the low end.',
+      ];
+    case 'pitch_lower':
+      return [
+        'The line settles low with no push behind it.',
+        'No strain or pressing on the low end.',
+      ];
+    case 'pitch_stability':
+      return [
+        'Held vowels stay on one steady note.',
+        'No audible wavering on held vowels.',
+      ];
+    case 'resonance_forward':
+      return targetFit?.resonance?.status === 'too_bright'
+        ? [
+            'The tongue sits lower through the line and the sound stays clear, not muffled.',
+            'Voice feels full and easy, not pressed.',
+          ]
+        : [
+            'The buzz stays on the lips and behind the top teeth all the way through.',
+            'Voice feels easy, not pressed.',
+          ];
+    case 'vocal_weight':
+      return [
+        'Each word starts soft, with no push behind the first one.',
+        'No pressed or throaty quality.',
+      ];
+    case 'tone_clarity':
+      return [
+        'The tone reads clear rather than airy.',
+        'The start of each word is clean, not pressed.',
+      ];
+    case 'strain_reduction':
+      return [
+        'The voice feels easy and unstrained.',
+        'Speaking feels comfortable.',
+      ];
+    case 'speech_rate':
+      return [
+        'Each word finishes before the next one starts.',
+        'The melody of the sentence stays alive.',
+      ];
+    case 'phrase_ending':
+      return [
+        'The last word carries all the way to its end.',
+        'No audible drop on the last word.',
+      ];
+    default:
+      // 2026-07-26: an unmapped focus produces NO win material (was a vague
+      // "One clear, easy-to-apply cue lands this turn." that named no
+      // observable outcome). Paired with the removed phrase_ending drill
+      // fallback — starvation is now visible, not disguised.
+      emitCoachWitness({
+        event: 'coach_focus_unmapped',
+        focus,
+        surface: 'buildSuccessCriteria',
+      });
+      return [];
+  }
+}
+
+// The one line the coach may say instead of a baseline comparison it cannot
+// honestly make. Code-owned, so nothing sanitizes it: it names no object, no
+// away-from-here practice and no person, states only what the app itself did,
+// and promises nothing about when numbers return.
+const BASELINE_RECALIBRATED_NOTE = 'baseline re-anchoring — the measurement scale changed, so the earlier numbers are not comparable to this take';
+
+function measurementCalibrationOf(record) {
+  const value = record && typeof record.measurementAnalysisVersion === 'string'
+    ? record.measurementAnalysisVersion.trim()
+    : '';
+  return value || null;
+}
+
+/**
+ * Were the frozen baseline and the current take measured by the same analyzer?
+ *
+ * True only when both carry the same non-empty stamp. An absent stamp is UNKNOWN
+ * calibration — every baseline frozen before 2026-07-26 has none — and unknown
+ * must never be optimistically read as "same as now", because that is exactly the
+ * case that invents progress out of a version bump.
+ */
+function isBaselineCalibrationComparable(baseline, latestAttempt) {
+  const baselineVersion = measurementCalibrationOf(baseline);
+  const takeVersion = measurementCalibrationOf(latestAttempt);
+  if (baselineVersion === null || takeVersion === null) return false;
+  return baselineVersion === takeVersion;
+}
+
+/**
+ * Build the last-3-take summary and trend from recentAttempts.
+ * Returns { last3TakeSummary, trend, baseline: { ... }, baselineNote }.
+ *
+ * When `sessionStartedAt` (ms) is given, the summary/trend window only counts
+ * takes recorded at/after it — the adapt machinery must not open a fresh
+ * session already stalling on last week's takes. The baseline comparison
+ * still uses the latest comparable attempt overall.
+ *
+ * baseline (the optional deltas block) is populated by the caller via
+ * `withBaselineDeltas(signalHistory, baseline)` if a baseline is available.
+ * baselineNote is non-empty only when a baseline exists but is not comparable.
+ */
+function buildHistory(learnerContext, baseline = null, targetIdentity = null, sessionStartedAt = null) {
+  const all = (Array.isArray(learnerContext?.recentAttempts)
+    ? learnerContext.recentAttempts
+    : []).filter((attempt) => (
+      isVoiceAttemptUsable(attempt)
+      && isComparableHistoryRecord(attempt, targetIdentity)
+    ));
+  // 2026-07-28: the summary/trend window is SESSION-scoped. recentAttempts is a
+  // cross-session ring, so a learner stuck at a low hit% opened EVERY session
+  // with trend 'flat' — and the flat-trend refinement then forced coach->adapt
+  // from turn one, before any cue was given this session. When the session
+  // start is known, only takes recorded at/after it feed the window (entries
+  // without a recordedAt are too old to place and drop out); the full
+  // cross-session list still feeds the baseline comparison below.
+  const sessionStartMs = toFiniteOrNull(sessionStartedAt);
+  const sessionScoped = sessionStartMs == null
+    ? all
+    : all.filter((attempt) => {
+      const recordedAt = toFiniteOrNull(attempt?.recordedAt);
+      return recordedAt != null && recordedAt >= sessionStartMs;
+    });
+  const recent = sessionScoped.slice(-3);
+  let summary = '';
+  let trend = 'uncertain';
+
+  if (recent.length === 0) {
+    summary = 'No prior takes in this session.';
+  } else {
+    const parts = recent.map((a, i) => {
+      const hitFraction = normalizeUnitFraction(a.targetHitPct);
+      const hit = hitFraction != null ? `${Math.round(hitFraction * 100)}%` : '?';
+      const p = a.meanPitchHz != null ? `${Math.round(a.meanPitchHz)}Hz` : '?';
+      return `t${i + 1}: ${p}/${hit}`;
+    });
+    summary = parts.join(' · ');
+
+    // Trend: compare latest vs earliest of the window
+    if (recent.length >= 2) {
+      const latest = recent[recent.length - 1];
+      const earliest = recent[0];
+      const latestHit = normalizeUnitFraction(latest?.targetHitPct) ?? 0;
+      const earliestHit = normalizeUnitFraction(earliest?.targetHitPct) ?? 0;
+      const dHit = latestHit - earliestHit;
+      const dPitch = (latest?.meanPitchHz ?? 0) - (earliest?.meanPitchHz ?? 0);
+      if (dHit >= 0.05) trend = 'improving';
+      else if (dHit <= -0.08 && dPitch < -3) trend = 'fatiguing';
+      else if (Math.abs(dHit) < 0.03 && Math.abs(dPitch) < 3) trend = 'flat';
+      else if (dHit > 0) trend = 'improving';
+      else trend = 'flat';
+    }
+  }
+
+  // Baseline deltas — null fields when no baseline is captured
+  const baselineDeltas = {
+    pitchMedianDeltaHz: null,
+    pitchMedianDeltaSt: null,
+    pitchRangeDeltaSt: null,
+    resonanceDeltaPct: null,
+    weightDeltaPct: null,
+    targetHitPctDelta: null,
+  };
+  let baselineNote = '';
+
+  const latestForBaseline = all.length > 0 ? all[all.length - 1] : null;
+  // v4 baseline honesty (2026-07-26). A frozen baseline and the current take are
+  // only subtractable when one instrument measured both. When the analyzer's
+  // calibration moved (v3 -> `voice-metrics-v4-formants`, repairing a front-vowel
+  // F2 that read ~798 Hz against a true 2761), resonance for the same voice moved
+  // from ~0.0 to ~0.8 — so a v3 baseline minus a v4 take reports roughly +80
+  // percentage points of "improvement" the learner did not produce. Rather than
+  // render a number nobody earned, every delta stays null and one neutral line
+  // says the baseline is being re-anchored; learner-context-service refreezes it
+  // from same-calibration takes. A missing stamp on either side is unknown
+  // calibration and is handled as a mismatch, never assumed to match.
+  const baselineUsable = Boolean(baseline)
+    && isComparableHistoryRecord(baseline, targetIdentity)
+    && latestForBaseline != null;
+  const baselineCalibrationComparable = isBaselineCalibrationComparable(
+    baseline,
+    latestForBaseline,
+  );
+  if (baselineUsable && !baselineCalibrationComparable) {
+    baselineNote = BASELINE_RECALIBRATED_NOTE;
+  }
+
+  if (baselineUsable && baselineCalibrationComparable) {
+    const latest = latestForBaseline;
+    const bMean = baseline.meanPitchHz;
+    const lMean = latest.meanPitchHz;
+    const bRange = baseline.pitchRangeSt;
+    const lRange = latest.pitchRangeSt;
+    const bRes = baseline.resonanceMean;
+    const lRes = latest.resonanceMean;
+    const bWt = baseline.weightMean;
+    const lWt = latest.weightMean;
+    const bHit = baseline.targetHitPct;
+    const lHit = latest.targetHitPct;
+
+    if (bMean != null && lMean != null) {
+      baselineDeltas.pitchMedianDeltaHz = Math.round((lMean - bMean) * 10) / 10;
+      baselineDeltas.pitchMedianDeltaSt = hzToSemitones(lMean, bMean);
+      if (baselineDeltas.pitchMedianDeltaSt != null) {
+        baselineDeltas.pitchMedianDeltaSt = Math.round(baselineDeltas.pitchMedianDeltaSt * 10) / 10;
+      }
+    }
+    if (bRange != null && lRange != null) {
+      baselineDeltas.pitchRangeDeltaSt = Math.round((lRange - bRange) * 10) / 10;
+    }
+    if (bRes != null && lRes != null) {
+      baselineDeltas.resonanceDeltaPct = Math.round((lRes - bRes) * 1000) / 10;
+    }
+    if (bWt != null && lWt != null) {
+      baselineDeltas.weightDeltaPct = Math.round((lWt - bWt) * 1000) / 10;
+    }
+    if (bHit != null && lHit != null) {
+      const baselineHit = normalizeUnitFraction(bHit);
+      const latestHit = normalizeUnitFraction(lHit);
+      if (baselineHit != null && latestHit != null) {
+        baselineDeltas.targetHitPctDelta = Math.round((latestHit - baselineHit) * 1000) / 10;
+      }
+    }
+  }
+
+  return {
+    last3TakeSummary: summary,
+    trend,
+    baseline: baselineDeltas,
+    baselineNote,
+  };
+}
+
+/**
+ * Build takeQuality block from capture reliability + analyzer self-reports.
+ */
+function buildTakeQuality(voiceState, captureReliability, safety) {
+  const summary = voiceState?.lastSummary || {};
+  const advanced = summary?.metrics?.advanced || {};
+  const quality = advanced.quality || {};
+
+  const voicedPct = toFiniteOrNull(advanced.voicedFramePct);
+  const clipPct = toFiniteOrNull(advanced.clippingPct);
+  const conf = toFiniteOrNull(advanced.scoreConfidence);
+
+  const reasons = [];
+  let usable = true;
+  const measurementValidity = resolveVoiceMeasurementUsability(advanced);
+
+  if (advanced.measurementAvailable === false) {
+    usable = false;
+    const rejectionReasons = Array.isArray(advanced.measurementRejectionReasons)
+      ? advanced.measurementRejectionReasons
+      : [];
+    reasons.push(...(rejectionReasons.length ? rejectionReasons : ['measurement unavailable']));
+  }
+
+  if (captureReliability === 'unusable') {
+    usable = false;
+    reasons.push('capture unusable');
+  } else if (captureReliability === 'low') {
+    usable = false;
+    reasons.push('low capture reliability');
+  } else if (captureReliability === 'degraded') {
+    usable = false;
+    reasons.push('capture degraded');
+  }
+  if (!measurementValidity.usableForScoring) {
+    usable = false;
+    reasons.push(...measurementValidity.reasons);
+  }
+  if (voicedPct != null && voicedPct < 0.45) {
+    reasons.push(`voiced coverage ${Math.round(voicedPct * 100)}%`);
+  }
+  if (clipPct != null && clipPct >= 0.02) {
+    // 2% sustained saturation (parity with safety-gates' capture bar).
+    reasons.push(`clipping ${(clipPct * 100).toFixed(2)}%`);
+  }
+  if (safety?.active) {
+    reasons.push(...(safety.reasons || []).slice(0, 2));
+  }
+
+  let confidence = 'medium';
+  if (conf != null) {
+    if (conf >= 0.75) confidence = 'high';
+    else if (conf < 0.5) confidence = 'low';
+  } else if (!usable) {
+    confidence = 'low';
+  }
+
+  return {
+    usable,
+    reasons,
+    voicedCoveragePct: voicedPct != null ? Math.round(voicedPct * 100) : null,
+    confidence,
+  };
+}
+
+/**
+ * Build the safety block mirror.
+ */
+function buildSafetyMirror(policy, safety) {
+  return {
+    shouldStop: safety?.state === 'stop',
+    shouldHydrateOrRest: safety?.state === 'fatigue_or_strain' || safety?.state === 'stop',
+    avoidHighPitchPush: safety?.state === 'stop' || safety?.state === 'fatigue_or_strain',
+    messageConstraint: policy?.safetyState === 'stop'
+      ? 'switch to a very gentle, unforced coordination'
+      : policy?.safetyState === 'fatigue_or_strain'
+        ? 'reduce vocal effort and avoid pushing'
+        : '',
+  };
+}
+
+// 2026-07-19 zero-friction wave: PER-KIND doNotSay entries (honest mirror).
+//   hum_sovt — resonance/brightness NUMBERS would lie (F2/frontness are not
+//     reliably measured on a closed hum), so the number-citing forms are banned.
+//   trill — pitch-stability/strain talk would lie (a trill is supposed to
+//     wobble and reads as strained to the analyzer), so that register is banned.
+//   siren — deliberately NO entries: honesty about "hit the ceiling"/range must
+//     never be suppressed (the renderer carries the honest-ceiling note; a ban
+//     list can only strip, so siren adds nothing that could under-report).
+const TAKE_KIND_DO_NOT_SAY = Object.freeze({
+  hum_sovt: Object.freeze([
+    'resonance percent', 'resonance percentage', 'resonance number',
+    'brightness score', 'brightness number', 'frontness', 'f2',
+  ]),
+  trill: Object.freeze([
+    'pitch stability', 'steady pitch', 'unstable pitch', 'pitch spread',
+    'jitter', 'shimmer', 'strain', 'strained',
+  ]),
+});
+
+/**
+ * Build doNotSay from multiple sources: scenario avoidTopics, drill contraindications,
+ * safety-driven avoid list, per-take-kind honesty entries, and an explicit override list.
+ */
+function buildDoNotSay({
+  scenarioAvoid, drillContraindications, safety, explicit = [], takeKind = null,
+  pitchPressure = false,
+}) {
+  const phrases = [];
+
+  if (Array.isArray(scenarioAvoid)) {
+    phrases.push(...scenarioAvoid);
+  }
+  if (Array.isArray(drillContraindications)) {
+    phrases.push(...drillContraindications);
+  }
+  if (safety?.state === 'stop' || safety?.state === 'fatigue_or_strain') {
+    phrases.push('push', 'try harder', 'intensity', 'go higher');
+  }
+  // 2026-07-27: SAFETY-TIER, so it sits with the block above rather than riding
+  // `explicit` at the end. The list is de-duped then capped at 24, and the cap
+  // drops the TAIL — a gag appended last is the first thing lost on a turn with a
+  // long scenario/preference list. "Do not tell someone who is already pushing to
+  // push harder" outranks a phrasing preference, so it is placed where the cap
+  // cannot reach it. 'push'/'louder' are deliberately absent: the correct
+  // code-owned cues here say "with no push at all" and "not louder", and gagging
+  // those words would delete the sentences that teach the fix.
+  if (pitchPressure === true) {
+    phrases.push('go higher', 'try harder', 'more intensity');
+  }
+  if (takeKind && TAKE_KIND_DO_NOT_SAY[takeKind]) {
+    phrases.push(...TAKE_KIND_DO_NOT_SAY[takeKind]);
+  }
+  if (Array.isArray(explicit)) {
+    phrases.push(...explicit);
+  }
+
+  // De-dupe, lower-case, drop empties, cap length
+  const cleaned = [...new Set(phrases.map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))];
+  return cleaned.slice(0, 24);
+}
+
+// ---------------------------------------------------------------------------
+// Take kind + per-kind metric contract (2026-07-19 zero-friction wave)
+// ---------------------------------------------------------------------------
+
+// Alias forms a drill tag/id/mode may carry for each canonical take kind.
+const TAKE_KIND_ALIASES = Object.freeze({
+  phrase: 'phrase',
+  siren: 'siren',
+  glide: 'siren',
+  sustained: 'sustained',
+  sustain: 'sustained',
+  sustained_vowel: 'sustained',
+  hum_sovt: 'hum_sovt',
+  hum: 'hum_sovt',
+  sovt: 'hum_sovt',
+  straw_free_sovt: 'hum_sovt',
+  resonance_play: 'resonance_play',
+  trill: 'trill',
+  lip_trill: 'trill',
+  tongue_trill: 'trill',
+  spontaneous: 'spontaneous',
+  free_talk: 'spontaneous',
+  ear_training: 'ear_training',
+  listening: 'ear_training',
+  silent: 'silent',
+});
+
+function normalizeTakeKindToken(value) {
+  if (typeof value !== 'string') return null;
+  const token = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return TAKE_KIND_ALIASES[token] || (TAKE_KINDS.includes(token) ? token : null);
+}
+
+// Substring heuristics for drill ids like 'starter-siren-up' / 'sovt-hum-2'.
+const TAKE_KIND_ID_HINTS = Object.freeze([
+  ['siren', 'siren'],
+  ['sovt', 'hum_sovt'],
+  ['hum', 'hum_sovt'],
+  ['trill', 'trill'],
+  ['sustain', 'sustained'],
+  ['resonance_play', 'resonance_play'],
+  ['resonance-play', 'resonance_play'],
+  ['ear', 'ear_training'],
+  ['silent', 'silent'],
+]);
+
+function takeKindFromId(id) {
+  if (typeof id !== 'string' || !id) return null;
+  const lower = id.toLowerCase();
+  for (const [hint, kind] of TAKE_KIND_ID_HINTS) {
+    if (lower.includes(hint)) return kind;
+  }
+  return null;
+}
+
+/**
+ * Resolve the takeKind for this turn. Order (decided):
+ *   repContext drill kind/tags/id (B-FLOW tags drills with `kind`)
+ *   -> practiceMode (conversation_practice -> spontaneous)
+ *   -> default 'phrase'.
+ * Null-tolerant on every shape; returns { kind, source }.
+ */
+function resolveTakeKind(repContext, practiceMode) {
+  const ctx = repContext && typeof repContext === 'object' ? repContext : {};
+  const drill = ctx.drill && typeof ctx.drill === 'object' ? ctx.drill : {};
+
+  const fromDrillKind = normalizeTakeKindToken(drill.kind) || normalizeTakeKindToken(ctx.kind);
+  if (fromDrillKind) return { kind: fromDrillKind, source: 'drill-kind' };
+
+  const tags = Array.isArray(drill.tags) ? drill.tags : (Array.isArray(ctx.tags) ? ctx.tags : []);
+  for (const tag of tags) {
+    const fromTag = normalizeTakeKindToken(tag);
+    if (fromTag) return { kind: fromTag, source: 'drill-tag' };
+  }
+
+  const fromId = takeKindFromId(drill.id) || takeKindFromId(ctx.drillId);
+  if (fromId) return { kind: fromId, source: 'drill-id' };
+
+  if (practiceMode === 'conversation_practice') return { kind: 'spontaneous', source: 'mode' };
+  return { kind: 'phrase', source: 'default' };
+}
+
+/**
+ * The take kind the ENGINE prescribed this turn, or null. (2026-07-26)
+ *
+ * WHY THIS EXISTS: the field failure was a split brain. The tutor prescribed an
+ * "mhmm" mid-conversation and the learner did it, but the machine's practice
+ * state never moved — coach_gates logged take_kind 'phrase', take_kind_source
+ * 'default' for the whole session, so every hum was analyzed as a phrase and
+ * every no-speech turn fell into the silent re-arm. The prescription existed;
+ * nothing carried it into state.
+ *
+ * WHY IT READS ONLY STRUCTURED FIELDS: the ENGINE decides, the model speaks.
+ * `coachingDecision.recommendedDrill` is code-selected (recommendDrillForFocus,
+ * or a registry pick) — it is the engine's own recommendation surface, and its
+ * `id`/`kind`/`tags` are exactly the fields resolveTakeKind already reads. The
+ * model's free text is DELIBERATELY not parsed, and neither is coachMove's
+ * `cue`/`nextAction`/`instruction` prose: those are renderer-facing sentences,
+ * some of them model-authored or import-authored, and treating a sentence as a
+ * state command would let generated text steer the analyzer's take kind and the
+ * strain thresholds that ride on it. That inverts the engine-decides law. A
+ * prescription the engine did not make in a structured field is not a
+ * prescription.
+ *
+ * Only VOCALISE kinds are returned (hum_sovt — which is where hum / sovt /
+ * straw_free_sovt all normalize — siren, sustained), per the existing alias
+ * mapping. Everything else yields null so the session's own drill state keeps
+ * the last word.
+ */
+function resolveEngineRecommendedTakeKind(signal) {
+  const drill = signal?.coachingDecision?.recommendedDrill;
+  if (!drill || typeof drill !== 'object' || Array.isArray(drill)) return null;
+  const drillId = typeof drill.id === 'string' && drill.id.trim() ? drill.id.trim() : null;
+  if (!drillId && !drill.kind && !Array.isArray(drill.tags)) return null;
+  const { kind } = resolveTakeKind({
+    drill: { id: drillId, kind: drill.kind, tags: drill.tags },
+  }, null);
+  if (!isVocaliseTakeKind(kind)) return null;
+  return { kind, drillId };
+}
+
+/**
+ * Build the COMPACT per-kind metric block (the decided metric contract).
+ * Reads only existing artifact fields + B-DSP's new proxies; every read is
+ * null-tolerant (a missing proxy yields null, never a crash).
+ *
+ *   siren          {rangeSt, glideSmoothness, topNoteStrainFlag, hitPitchCeiling}
+ *   sustained      {pitchStdSt, cppsLike, hnr, jitterLocal}
+ *   hum_sovt       {pitchStdSt, hnr, centroidHz}          — NO F2/frontness
+ *   resonance_play {f2MedianHz, frontnessScore, f2RangeHz}
+ *   trill          {trillDetected, trillRateHz, trillDurationMs}
+ *   phrase/spontaneous -> {} (audioMetrics carries the turn; spontaneous drops
+ *     the contour-fit fields there — see buildSignal)
+ *   ear_training/silent -> {}
+ *
+ * `hnr` is the artifact's quality.harmonicStrength (mean per-frame HNR in dB).
+ * `centroidHz` is advanced.spectralCentroidMeanHz.
+ */
+function buildKindMetrics(takeKind, { metrics = {}, advanced = {}, quality = {}, formantLite = {}, targetProfile = {}, strainThresholds = null } = {}) {
+  // NOTE the explicit null guards: Number(null) === 0 is finite (the documented
+  // null-as-zero trap), and B-DSP's proxies are EXPLICITLY nullable — a null
+  // trillRateHz/glideSmoothness must stay null, never become 0.
+  const num = (v) => (v == null ? null : toFiniteOrNull(v));
+  const round = (v, digits = 2) => {
+    const n = num(v);
+    if (n == null) return null;
+    const f = 10 ** digits;
+    return Math.round(n * f) / f;
+  };
+
+  switch (takeKind) {
+    case 'siren': {
+      const p10 = num(advanced.pitchP10Hz);
+      const p90 = num(advanced.pitchP90Hz);
+      const rangeSt = num(metrics.pitchRangeSt)
+        ?? (p10 != null && p90 != null && p10 > 0 ? round(hzToSemitones(p90, p10), 1) : null);
+      const strainRisk = num(quality.strainRisk);
+      const warnBar = num(strainThresholds?.warn);
+      const ceiling = toFiniteOrNull(targetProfile?.advancedBands?.pitchP90HzCeiling);
+      return {
+        rangeSt: round(rangeSt, 1),
+        glideSmoothness: round(advanced.glideSmoothness, 2),
+        topNoteStrainFlag: strainRisk != null && warnBar != null ? strainRisk >= warnBar : false,
+        hitPitchCeiling: p90 != null && ceiling != null ? p90 >= ceiling : false,
+      };
+    }
+    case 'sustained':
+      return {
+        pitchStdSt: round(advanced.pitchStdSt, 2),
+        cppsLike: round(quality.cppsLike, 2),
+        hnr: round(quality.harmonicStrength, 2),
+        jitterLocal: round(quality.jitterLocal, 4),
+      };
+    case 'hum_sovt':
+      // Deliberately NO F2/frontness: a closed hum has no honest resonance read.
+      return {
+        pitchStdSt: round(advanced.pitchStdSt, 2),
+        hnr: round(quality.harmonicStrength, 2),
+        centroidHz: round(advanced.spectralCentroidMeanHz, 0),
+      };
+    case 'resonance_play':
+      return {
+        f2MedianHz: round(formantLite.f2MedianHz, 0),
+        frontnessScore: round(formantLite.frontnessScore, 2),
+        f2RangeHz: round(advanced.f2RangeHz, 0),
+      };
+    case 'trill': {
+      const trillRateHz = num(advanced.trillRateHz);
+      return {
+        trillDetected: trillRateHz != null && trillRateHz > 0,
+        trillRateHz: round(trillRateHz, 1),
+        trillDurationMs: round(advanced.trillDurationMs, 0),
+      };
+    }
+    // phrase/spontaneous keep using audioMetrics; ear_training/silent have
+    // no honest take metrics at all.
+    default:
+      return {};
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Session scope (tier + eyesFree) + daypart ring default (2026-07-19)
+// ---------------------------------------------------------------------------
+
+const SESSION_TIER_VALUES = SESSION_TIERS;
+
+// Daypart of a local-time timestamp: morning [5,12) · afternoon [12,17) ·
+// evening [17,22) · night [22,5). Used ONLY to recall a tier default from the
+// sessions ring — never surfaced to the learner.
+function daypartOf(ts) {
+  const d = new Date(Number(ts));
+  if (!Number.isFinite(d.getTime())) return null;
+  const h = d.getHours();
+  if (h >= 5 && h < 12) return 'morning';
+  if (h >= 12 && h < 17) return 'afternoon';
+  if (h >= 17 && h < 22) return 'evening';
+  return 'night';
+}
+
+// Read the sessions ring off a learner snapshot (top-level or nested), the same
+// dual-shape rule buildLearnerMemo uses. Newest entries are LAST.
+function resolveSessionsRing(learnerContext) {
+  const ctx = learnerContext && typeof learnerContext === 'object' ? learnerContext : {};
+  const nested = ctx.learnerContext && typeof ctx.learnerContext === 'object' ? ctx.learnerContext : {};
+  return Array.isArray(ctx.sessions) ? ctx.sessions
+    : (Array.isArray(nested.sessions) ? nested.sessions : []);
+}
+
+function normalizeSessionTier(value) {
+  const tier = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return SESSION_TIER_VALUES.includes(tier) ? tier : null;
+}
+
+/**
+ * Recall the most recent ring tier recorded for the CURRENT daypart (B-SESS
+ * ring entries carry {endReason, tier, at}). Newest-first walk; entries with
+ * no tier or no usable timestamp are skipped. Returns 'full'|'quiet'|'silent'
+ * or null when this daypart has no recorded tier yet.
+ */
+function resolveRingTierForDaypart(sessions, now = Date.now()) {
+  const ring = Array.isArray(sessions) ? sessions : [];
+  const nowDaypart = daypartOf(now);
+  if (!nowDaypart) return null;
+  for (let i = ring.length - 1; i >= 0; i -= 1) {
+    const entry = ring[i];
+    if (!entry || typeof entry !== 'object') continue;
+    // Review fix: zero-take peeks stamp the session's default tier — they must
+    // not shadow an older genuine choice in this daypart.
+    if (entry.endReason === 'cut-short' && !(toFiniteOrNull(entry.takes) > 0)) continue;
+    const tier = normalizeSessionTier(entry.tier);
+    if (!tier) continue;
+    const at = toFiniteOrNull(entry.at) ?? toFiniteOrNull(entry.startedAt);
+    if (at == null) continue;
+    if (daypartOf(at) === nowDaypart) return tier;
+  }
+  return null;
+}
+
+/**
+ * Resolve the sessionScope block for the signal. Priority:
+ *   explicit arg (B-SESS session/payload extras)
+ *   -> voiceState.sessionScope
+ *   -> ring tier recorded for the current daypart ('ring-default')
+ *   -> {tier:'full', eyesFree:false} ('default').
+ */
+function resolveSessionScope({ sessionScope = null, voiceState = null, learnerContext = null, now = Date.now() } = {}) {
+  const explicit = sessionScope && typeof sessionScope === 'object' ? sessionScope : null;
+  const fromState = voiceState && typeof voiceState.sessionScope === 'object' ? voiceState.sessionScope : null;
+  const chosen = explicit || fromState;
+  if (chosen) {
+    const tier = normalizeSessionTier(chosen.tier);
+    if (tier) {
+      return {
+        tier,
+        eyesFree: chosen.eyesFree === true,
+        source: explicit ? 'explicit' : 'voice-state',
+      };
+    }
+  }
+  const ringTier = resolveRingTierForDaypart(resolveSessionsRing(learnerContext), now);
+  if (ringTier) {
+    return { tier: ringTier, eyesFree: chosen ? chosen.eyesFree === true : false, source: 'ring-default' };
+  }
+  return { tier: 'full', eyesFree: chosen ? chosen.eyesFree === true : false, source: 'default' };
+}
+
+// ---------------------------------------------------------------------------
+// Take evidence (no praise without data — 2026-07-18 truth+safety wave)
+// ---------------------------------------------------------------------------
+
+// A take older than this can no longer ground "that was good" praise. Sessions
+// close at ~25 min (guardian) and takes land every minute or two, so a 10-minute
+// old measurement is several turns stale.
+const FRESH_TAKE_MAX_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * TAKE-EVIDENCE FRESHNESS (2026-07-26, Defect 3).
+ *
+ * `voiceState.lastSummary` / `lastAttemptArtifact` are STICKY: they hold the
+ * last DSP take whenever it happened — possibly a different mode, possibly
+ * days ago, possibly restored from disk. Two coach turns on 2026-07-26 both
+ * resolved intent `repair_capture` with ZERO voice-trainer traffic: no fresh
+ * take existed at all, and the coach was judging (and rejecting) an old one,
+ * so it asked the learner to "record again" forever.
+ *
+ * THE RULE — a take is FRESH iff it was finalized at or after the start of the
+ * CURRENT turn window, where
+ *
+ *     turnWindowStartedAt = max(session start, the PREVIOUS input turn)
+ *
+ * "Previous", not current: the learner's take for this turn is finalized
+ * around the same moment as this turn's ASR, in either order, so anchoring on
+ * the current input turn would reject a take that is genuinely this turn's.
+ *
+ * FAIL-OPEN, twice over, because a false "stale" is as harmful as a false
+ * "fresh":
+ *   - no resolvable window            -> fresh (callers that do not track turns
+ *                                       keep their existing behavior exactly)
+ *   - no take evidence at all         -> fresh (nothing to gate; the absent
+ *                                       path already handles it)
+ * STALE is asserted only on positive evidence: a resolvable window AND take
+ * evidence that either predates it or carries no timestamp to defend itself
+ * with (a take this runtime finalized always stamps one).
+ *
+ * Returns { fresh, reason, takeFinalizedAt, turnWindowStartedAt }.
+ */
+function resolveTakeEvidenceFreshness(voiceState, options = {}) {
+  const explicitWindow = toFiniteOrNull(options.turnWindowStartedAt);
+  const sessionStartedAt = toFiniteOrNull(voiceState?.sessionStartedAt);
+  const previousInputTurnAt = toFiniteOrNull(
+    voiceState?.voiceInputRuntime?.previousInputTurnAt,
+  );
+  const derivedWindow = sessionStartedAt == null && previousInputTurnAt == null
+    ? null
+    : Math.max(sessionStartedAt ?? 0, previousInputTurnAt ?? 0);
+  const turnWindowStartedAt = explicitWindow ?? derivedWindow;
+
+  const artifact = voiceState?.lastAttemptArtifact || null;
+  const hasTakeEvidence = Boolean(artifact) || Boolean(voiceState?.lastSummary);
+  const takeFinalizedAt = toFiniteOrNull(voiceState?.lastTakeFinalizedAt)
+    ?? toFiniteOrNull(artifact?.finalizedAt)
+    ?? toFiniteOrNull(artifact?.endedAt)
+    ?? toFiniteOrNull(artifact?.createdAt);
+
+  if (turnWindowStartedAt == null) {
+    return { fresh: true, reason: 'window_unknown', takeFinalizedAt, turnWindowStartedAt: null };
+  }
+  if (!hasTakeEvidence) {
+    return { fresh: true, reason: 'no_take_evidence', takeFinalizedAt, turnWindowStartedAt };
+  }
+  if (takeFinalizedAt == null) {
+    return { fresh: false, reason: 'take_timestamp_missing', takeFinalizedAt, turnWindowStartedAt };
+  }
+  if (takeFinalizedAt >= turnWindowStartedAt) {
+    return { fresh: true, reason: 'in_turn_window', takeFinalizedAt, turnWindowStartedAt };
+  }
+  return { fresh: false, reason: 'before_turn_window', takeFinalizedAt, turnWindowStartedAt };
+}
+
+/**
+ * The take-evidence-ABSENT view of a voiceState: the same session, with the
+ * stale take removed. Everything that is not take evidence (target profile,
+ * active line, coach thread, strain watch, input runtime) survives untouched.
+ *
+ * Absent is NOT the same as rejected. Per voice-measurement-validity, an absent
+ * measurement leaves `measurementAvailable === null`, which stays USABLE, so
+ * intent falls through to resolveIntent instead of being forced to
+ * `repair_capture`; and the safety gate finds no capture reasons to latch
+ * `capture_only` on. A stale take must not be able to accuse the learner's
+ * microphone of a fault it never observed.
+ */
+function withTakeEvidenceAbsent(voiceState) {
+  if (!voiceState || typeof voiceState !== 'object') return voiceState;
+  return {
+    ...voiceState,
+    lastSummary: null,
+    lastAttemptArtifact: null,
+    lastTakeTimeline: null,
+    // `repContext` is stamped ONLY at take-finalize (voice-standalone-runtime
+    // finalizeVoiceTake) and is exactly as sticky as the artifact it came from.
+    // Leaving it behind would let a stale hum keep claiming takeKind
+    // 'hum_sovt' — and with it the vocalise-LENIENT strain warn bar — on a turn
+    // that has no fresh take at all. Gated turns fall back to the SELECTED
+    // drill, which is live session state rather than take evidence.
+    repContext: null,
+  };
+}
+
+/**
+ * Assess whether the voiceState carries a USABLE recent take: core metrics
+ * present AND a finalize timestamp fresh enough to still describe "the last
+ * take". The timestamp comes from the attempt artifact (finalizedAt/endedAt/
+ * createdAt, normalized epoch-ms by voice-session-state); a summary with no
+ * timestamped artifact is treated as unverifiable -> not usable (fail closed:
+ * praise requires evidence, uncertainty does not).
+ * Returns { hasMetrics, measuredAt, ageMs, usable, reason }.
+ */
+function assessTakeEvidence(voiceState, now = Date.now()) {
+  const summary = voiceState?.lastSummary || voiceState?.lastAttemptArtifact?.summary || {};
+  const metrics = summary?.metrics || {};
+  const advanced = metrics?.advanced || {};
+
+  const hasMetrics = [
+    metrics.meanPitchHz,
+    metrics.resonanceMean,
+    metrics.weightMean,
+    metrics.resonancePct,
+    metrics.weightPct,
+    metrics.targetHitPct,
+    advanced.scoreConfidence,
+  ].some((value) => toFiniteOrNull(value) != null);
+
+  const artifact = voiceState?.lastAttemptArtifact || {};
+  const measuredAt = toFiniteOrNull(artifact.finalizedAt)
+    ?? toFiniteOrNull(artifact.endedAt)
+    ?? toFiniteOrNull(artifact.createdAt);
+  const ageMs = measuredAt != null ? Math.max(0, Number(now) - measuredAt) : null;
+
+  let usable = false;
+  let reason = null;
+  const measurementValidity = resolveVoiceMeasurementUsability(advanced);
+  if (measurementValidity.measurementAvailable === false) {
+    reason = 'measurement_unavailable';
+  } else if (!measurementValidity.usableForScoring) {
+    reason = measurementValidity.reasons[0] || 'measurement_unavailable';
+  } else if (!hasMetrics) {
+    reason = 'no_metrics';
+  } else if (measuredAt == null) {
+    reason = 'no_timestamp';
+  } else if (ageMs > FRESH_TAKE_MAX_AGE_MS) {
+    reason = 'stale';
+  } else {
+    usable = true;
+  }
+
+  return { hasMetrics, measuredAt, ageMs, usable, reason };
+}
+
+// ---------------------------------------------------------------------------
+// Consecutive misses (wires the policy-gates adapt path — the counter had no
+// producer anywhere, so the adapt-by-count path was dead in live; see
+// docs/REVIEW-2026-07-18-TWO-MODE.md P2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the count of consecutive non-improving takes from the learner
+ * snapshot's recentAttempts ring (newest-LAST; entries carry targetHitPct +
+ * targetPreset). A "miss" pair is a take whose targetHitPct did not improve on
+ * its predecessor. Counted from the newest pair backwards until an improving
+ * pair breaks the run; capped so one bad stretch can't dominate forever.
+ * Entries for other presets are ignored when a preset is given.
+ */
+// 2026-07-28 noise floor for the miss counter: a hit% delta inside this band is
+// analyzer noise, not evidence the method is or isn't landing. Matches the flat
+// band buildHistory's trend already uses (0.03). Without it, a learner hovering
+// near 0% saturated the counter on pure wiggle (it caps at 6).
+const CONSECUTIVE_MISS_NOISE_FLOOR = 0.03;
+
+function deriveConsecutiveMisses(learnerContext, targetIdentity = null, sessionStartedAt = null) {
+  const attempts = Array.isArray(learnerContext?.recentAttempts)
+    ? learnerContext.recentAttempts
+    : [];
+  // 2026-07-28: SESSION-scoped like the trend window — the ring is
+  // cross-session, so misses used to latch across sessions (and across drill
+  // lines): a bad yesterday opened today already stalling. When the session
+  // start is known, only takes recorded at/after it count.
+  const sessionStartMs = toFiniteOrNull(sessionStartedAt);
+  const relevant = attempts.filter((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    if (sessionStartMs != null) {
+      const recordedAt = toFiniteOrNull(entry.recordedAt);
+      if (recordedAt == null || recordedAt < sessionStartMs) return false;
+    }
+    return isComparableHistoryRecord(entry, targetIdentity)
+      && isVoiceAttemptUsable(entry)
+      && toFiniteOrNull(entry.targetHitPct) != null;
+  });
+  let misses = 0;
+  for (let i = relevant.length - 1; i >= 1; i -= 1) {
+    const current = normalizeUnitFraction(relevant[i].targetHitPct);
+    const previous = normalizeUnitFraction(relevant[i - 1].targetHitPct);
+    if (current == null || previous == null) break;
+    const delta = current - previous;
+    if (delta <= -CONSECUTIVE_MISS_NOISE_FLOOR) {
+      misses += 1;
+    } else if (delta > CONSECUTIVE_MISS_NOISE_FLOOR) {
+      break; // a real improvement ends the run
+    }
+    // |delta| within the noise floor: neither a miss nor an improvement — the
+    // pair is skipped and the run keeps looking at older takes.
+  }
+  return Math.min(misses, 6);
+}
+
+// ---------------------------------------------------------------------------
+// Intent resolution
+// ---------------------------------------------------------------------------
+
+function resolveIntent(policy, issues, safety, takeEvidence = null, witness = null, takeUsable = false) {
+  // 2026-07-28 (praise-guard extension): a hold/repair turn never licenses
+  // performance praise. The guard used to wrap only acknowledge_win, so these
+  // early returns recorded praise_guard: null and the suppression was invisible
+  // in the coach_gates journal. Record it with the same mechanism.
+  if (safety.state === 'stop' || safety.state === 'fatigue_or_strain') {
+    if (witness) witness.praiseGuard = 'suppressed:safety_hold';
+    return 'stop_and_reset';
+  }
+  // capture_only gates on take usability (2026-07-28, same rule as the policy
+  // gate): an ASR-side capture fault on an acoustically usable take must not
+  // demand a re-record — the turn falls through to normal intent resolution.
+  if (safety.state === 'capture_only' && !takeUsable) {
+    if (witness) witness.praiseGuard = 'suppressed:capture_hold';
+    return 'repair_capture';
+  }
+  if (policy.conversationPriority === 'highest') return 'continue_conversation';
+  if (policy.mode === 'reflection') return 'reflection_summary';
+  if (policy.mode === 'lesson_plan') return 'lesson_transition';
+  // A text-driven breather hold (decline / overwhelm) never licenses praise
+  // either: shouldCorrect is false so acknowledge_win is unreachable below, but
+  // the guard must still SHOW the suppression instead of a null.
+  if (policy.coachingAction === 'breather' && witness) {
+    witness.praiseGuard = 'suppressed:breather_hold';
+  }
+  if (!issues.primaryIssue && policy.shouldCorrect) {
+    // No praise without data: acknowledge_win claims quality ("keep that same
+    // quality"), so it requires a usable recent take — metrics present AND
+    // fresh. Absent or stale evidence falls to a neutral, present-focused
+    // conversation intent instead of a manufactured win (honest-mirror law).
+    if (takeEvidence && takeEvidence.usable) {
+      if (witness) witness.praiseGuard = 'granted';
+      return 'acknowledge_win';
+    }
+    if (witness) {
+      witness.praiseGuard = `suppressed:${(takeEvidence && takeEvidence.reason) || 'no_evidence'}`;
+    }
+    return 'continue_conversation';
+  }
+  if (policy.shouldCorrect && issues.primaryIssue) return 'single_actionable_cue';
+  return 'continue_conversation';
+}
+
+// ---------------------------------------------------------------------------
+// v1-compatible coachMove — still produced so the renderer can stay lean.
+// Now a thin projection over coachingDecision.
+// ---------------------------------------------------------------------------
+
+function buildCoachMove({ intent, issues, safety, mode, voiceState }) {
+  const move = {
+    intent,
+    cue: '',
+    exampleRewrite: '',
+    nextAction: '',
+    successCriteria: '',
+  };
+
+  switch (intent) {
+    case 'stop_and_reset':
+      move.cue = safety.instruction || 'Switch to a very gentle hum or lip trill with no pushing.';
+      move.nextAction = 'gentle_low_effort_reset';
+      move.successCriteria = 'The sound stays comfortable, relaxed, and unforced.';
+      break;
+
+    case 'repair_capture':
+      move.cue = 'Try that once more a little closer to the mic with a clear, steady voice.';
+      move.nextAction = 'repeat_with_better_capture';
+      move.successCriteria = 'A clean, clearly voiced recording.';
+      break;
+
+    case 'continue_conversation':
+      move.cue = '';
+      move.nextAction = 'ask_natural_followup';
+      move.successCriteria = 'Natural conversation continues.';
+      break;
+
+    case 'single_actionable_cue':
+      // 2026-07-26: every cue below now names an ARTICULATOR and what it does
+      // (tongue / lips / jaw / soft palate), matching the register the renderer
+      // was fine-tuned on. The old wording named states ("keep the voice
+      // lighter") or pure imagery ("think of the sound ringing forward"), which
+      // is exactly what elicited free-floating replies like "let the words out".
+      // Larynx height is never named directly; closure is always the gentle
+      // "uh" catch, never a press.
+      if (issues.primaryIssue === 'voice_weight_heavy') {
+        // 2026-07-26 whole-body register: a weight cue starts where the excess
+        // press comes from. Shoulders first, then the jaw, then the contact.
+        move.cue = 'Let your shoulders drop and the jaw stay loose, then start each word more softly — lighter contact, less press.';
+        move.nextAction = 'repeat_with_lighter_weight';
+        move.successCriteria = 'Less heaviness in the sound, without pushing.';
+      } else if (issues.primaryIssue === 'voice_weight_light') {
+        move.cue = 'Open the jaw a touch more and let each word start on firmer contact, so it carries a little more chest.';
+        move.nextAction = 'repeat_with_more_weight';
+        move.successCriteria = 'A little more heaviness without pressing.';
+      } else if (issues.primaryIssue === 'resonance_slightly_back') {
+        // 2026-07-26 whole-body register: the learner's own hand is a legal and
+        // useful feedback channel (it is not equipment). The chest is the BASELINE
+        // here — feel where it buzzes now — and the tongue lift is what moves it
+        // forward. Measured direction-safe: the cross-direction stripper keeps
+        // this in BOTH directions, because it names no chest-resonance target.
+        move.cue = 'Rest a hand on your chest to feel where it buzzes now, then lift the front of your tongue toward the roof of your mouth so the buzz moves forward behind your top teeth.';
+        move.nextAction = 'repeat_with_forward_resonance';
+        move.successCriteria = 'The tongue comes further forward behind the top teeth.';
+      } else if (issues.primaryIssue === 'resonance_too_forward') {
+        move.cue = 'Let the tongue settle back and lower, and open a little more space at the back of the mouth.';
+        move.nextAction = 'repeat_with_eased_resonance';
+        move.successCriteria = 'The sound settles closer to the selected voice.';
+      } else if (issues.primaryIssue === 'phrase_ending_instability') {
+        move.cue = 'Keep the lips and jaw moving right through the last two words so the ending stays up.';
+        move.nextAction = 'repeat_focusing_on_ending';
+        move.successCriteria = 'Stable, lifted phrase ending.';
+      } else if (issues.primaryIssue === 'pitch_falling_at_end') {
+        // Direction-neutral: buildCoachMove receives no direction, so a RISE cue
+        // here would be deleted downstream by the cross-direction stripper.
+        // "Stays alive rather than drops" is safe for every surviving target.
+        move.cue = 'Keep the lips and jaw moving through the last two words so the ending does not fall away.';
+        move.nextAction = 'repeat_with_rising_contour';
+        move.successCriteria = 'Phrase ending stays lifted.';
+      } else if (issues.primaryIssue === 'breathy_quality') {
+        move.cue = 'Start the first word with a tiny, gentle "uh" — the small catch just before a cough — then keep that clean contact.';
+        move.nextAction = 'repeat_with_cleaner_onset';
+        move.successCriteria = 'The tone reads clear rather than airy, with no pressing.';
+      } else if (issues.primaryIssue === 'pitch_pressed_in_band') {
+        // The NOTE is already right; only the effort behind it is wrong. So this
+        // cue must not move pitch at all — it removes air pressure and lets the
+        // note stay where it is. Whole-body register, no larynx action named, and
+        // nothing for the learner to push into.
+        move.cue = 'Let your shoulders drop and say the sentence quieter on the same note, and let the ribs sink slowly so the air stays even instead of driving the sound up.';
+        move.nextAction = 'repeat_with_less_pressure';
+        move.successCriteria = 'The same pitch with less air pressure behind it.';
+      } else if (issues.primaryIssue === 'strain_risk') {
+        // 2026-07-26 whole-body register: strain is rarely only in the mouth, so
+        // the release starts at the shoulders and neck. Still names no larynx
+        // action and still never asks the learner to push through anything.
+        move.cue = 'Let your shoulders drop away from your ears and your jaw hang loose, then say the sentence quieter so the voice does less work.';
+        move.nextAction = 'repeat_with_less_effort';
+        move.successCriteria = 'A comfortable sound without strain.';
+      } else if (issues.primaryIssue === 'spectral_tilt_dark') {
+        move.cue = 'Spread your lips slightly into the start of a smile and lift the tongue a little higher and further forward.';
+        move.nextAction = 'repeat_with_brighter_placement';
+        move.successCriteria = 'The tongue stays high and forward behind the top teeth.';
+      } else if (issues.primaryIssue === 'pitch_floor_under_target') {
+        move.cue = 'Start on a small "mm" hum with the lips lightly together, then open the jaw into the words and keep the low notes up there.';
+        move.nextAction = 'repeat_with_hum_onset';
+        move.successCriteria = 'How low the voice dips stays at or above the target.';
+      } else if (issues.primaryIssue === 'pitch_above_target') {
+        move.cue = 'Let the jaw hang looser and start on an easy, low "uh", keeping the tongue flat and relaxed through the line.';
+        move.nextAction = 'repeat_with_lower_pitch';
+        move.successCriteria = 'Pitch sits within the target.';
+      } else if (issues.primaryIssue === 'pitch_unstable') {
+        move.cue = 'Hold the first vowel on one comfortable note with the jaw still, then continue.';
+        move.nextAction = 'repeat_with_held_vowel';
+        move.successCriteria = 'The voice stays on one steady note.';
+      } else {
+        move.cue = 'Set the tongue and lips on the first word, then keep exactly that shape for the rest of the sentence.';
+        move.nextAction = 'repeat';
+        move.successCriteria = 'The mouth shape stays put from the first word to the last.';
+      }
+      const activeLine = voiceState?.activeLine?.displayText || voiceState?.forecastPhrase || '';
+      if (activeLine && move.nextAction.startsWith('repeat')) {
+        const words = activeLine.split(/\s+/);
+        if (words.length > 2) {
+          move.exampleRewrite = words.slice(-3).join(' ') + '~';
+        }
+      }
+      break;
+
+    case 'acknowledge_win':
+      move.cue = 'That was good — keep that same mouth shape on the next sentence.';
+      move.nextAction = 'continue_or_next_line';
+      move.successCriteria = 'Maintain the current quality.';
+      break;
+
+    case 'reflection_summary':
+      // 2026-07-26 homework law: was "...for next time", which pointed the turn at
+      // a future session. All practice happens now, so the focus is for the next
+      // line in THIS session.
+      move.cue = 'Summarize what changed and pick one focus for the next sentence.';
+      move.nextAction = 'summarize_and_pick_focus';
+      move.successCriteria = 'Clear takeaway and one next focus.';
+      break;
+
+    case 'lesson_transition':
+      move.cue = 'Introduce the next lesson step.';
+      move.nextAction = 'present_next_knowledge_point';
+      move.successCriteria = 'Student understands the next focus.';
+      break;
+  }
+
+  return move;
+}
+
+// ---------------------------------------------------------------------------
+// Top-level builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a complete CoachingSignal v2 from all available inputs.
+ */
+// 2026-06-25: resolve the learner's authoritative coaching direction from the
+// profile (mtf->feminizing), handling both the flat and nested learnerContext
+// shapes buildLearnerMemo accepts. null when unset. The live sanitizer's
+// direction filter prefers this over preset-name matching (closes the unknown-preset gap).
+// 2026-07-26 MTF-ONLY: a stored 'ftm'/'masculinizing' profile returns null (no
+// direction claimed) rather than being remapped — see directionFromTarget.
+function resolveLearnerDirection(learnerContext) {
+  const ctx = learnerContext && typeof learnerContext === 'object' ? learnerContext : {};
+  const profile = (ctx.profile && typeof ctx.profile === 'object' ? ctx.profile : null)
+    || (ctx.learnerContext && ctx.learnerContext.profile && typeof ctx.learnerContext.profile === 'object' ? ctx.learnerContext.profile : null);
+  const d = profile && profile.direction;
+  if (d === 'mtf' || d === 'feminizing') return 'feminizing';
+  return null;
+}
+
+function buildSignal({
+  voiceState,
+  learnerContext = null,
+  lessonState = null,
+  userMessage = '',
+  practiceMode = 'active_drill',
+  targetPreset = 'cute-feminine',
+  scenarioPolicy = null,
+  baseline = null,
+  drillRegistry = null,
+  explicitDoNotSay = null,
+  // V1.5 strain guardian: compact per-session strain accumulator field. When the
+  // runtime supplies it (preferred), it rides on the signal so the live LLM can
+  // reference fatigue naturally. Falls back to voiceState.strainWatch, else null.
+  strainWatch = null,
+  // 2026-07-18: consecutive non-improving takes. An explicit caller value wins;
+  // otherwise derived from the learner snapshot's recentAttempts ring so the
+  // policy-gates adapt-by-count path can actually fire in live.
+  consecutiveMisses = null,
+  // 2026-07-19 zero-friction wave: the rep context for this turn (B-FLOW tags
+  // drills with `kind`; shapes tolerated: {drill:{id,kind,tags}}, {kind},
+  // {drillId}). Falls back to voiceState.repContext. Drives takeKind.
+  repContext = null,
+  // 2026-07-19: sessionScope {tier:'full'|'quiet'|'silent', eyesFree:boolean}
+  // (B-SESS puts it on the session + payload extras). Explicit arg wins, then
+  // voiceState.sessionScope, then the sessions-ring daypart default.
+  sessionScope = null,
+  // 2026-07-26 phase B: the ACTIVE practice card's tokens, for per-section
+  // localization of the weakest fragment. Shape: PracticeCard.tokens
+  // (`{ text, emphasis, focusHint }`, practice-cards.js:21) — cue-sheet tokens
+  // carrying startProgress/endProgress are also accepted. Omit it and no
+  // sections are computed; nothing else changes.
+  cardTokens = null,
+  // Injectable clock for the take-freshness guard (tests).
+  now = undefined,
+  // 2026-07-26 (Defect 3): start of THIS turn's window — the later of session
+  // start and the PREVIOUS input turn. When supplied (or derivable from
+  // voiceState), take evidence finalized before it is treated as ABSENT rather
+  // than as a rejected take. Omit it and nothing is gated.
+  turnWindowStartedAt = undefined,
+} = {}) {
+  const mode = normalizePracticeMode(practiceMode);
+  const nowValue = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+
+  // Step -1 (2026-07-26): gate STALE take evidence out before anything reads
+  // it. `voiceState` is rebound here on purpose: the freshness verdict must
+  // reach every downstream consumer (metric contract, safety gate, issue
+  // detection, target fit, praise guard) as one consistent view of the world.
+  const takeFreshness = resolveTakeEvidenceFreshness(voiceState, { turnWindowStartedAt });
+  if (!takeFreshness.fresh) {
+    voiceState = withTakeEvidenceAbsent(voiceState);
+  }
+
+  // Step 0 (2026-07-19): resolve WHAT KIND of take this turn reacts to — the
+  // safety gate and issue detection both interpret strain per kind. No server
+  // path sets voiceState.repContext today; the finalized take's OWN repContext
+  // rides the attempt artifact — read it so post-take coach turns are
+  // kind-aware (live-verified gap: without this, every turn resolved 'phrase').
+  const resolvedTakeKind = resolveTakeKind(
+    repContext
+      || voiceState?.repContext
+      || voiceState?.lastAttemptArtifact?.repContext
+      || voiceState?.lastAttemptArtifact?.summary?.repContext,
+    mode,
+  );
+  const takeKind = resolvedTakeKind.kind;
+  const summary = voiceState?.lastSummary || {};
+  const metricContract = resolveMetricContract(voiceState, summary);
+  const targetIdentity = {
+    targetKey: metricContract.target.targetKey,
+    targetSource: metricContract.target.source,
+    targetPreset: metricContract.target.targetPreset,
+    valid: Boolean(metricContract.target.targetKey),
+  };
+  const measurementValidity = resolveVoiceMeasurementUsability(metricContract.advanced);
+
+  // Step 1: Safety assessment (deterministic; vocalise kinds get the lenient
+  // strain warn bar — the stop tier is never adjusted)
+  const safety = assessSafetyState(voiceState, { takeKind });
+
+  // Step 2: Capture reliability (deterministic)
+  const captureReliability = assessCaptureReliability(voiceState);
+
+  // Step 3: Policy decisions (deterministic). NOTE the explicit null check:
+  // Number(null) === 0 is finite (the documented null-as-zero trap), so a bare
+  // isFinite test would read "not provided" as an explicit zero.
+  const hasExplicitMisses = consecutiveMisses != null && Number.isFinite(Number(consecutiveMisses));
+  const resolvedMisses = hasExplicitMisses
+    ? Math.max(0, Math.round(Number(consecutiveMisses)))
+    : deriveConsecutiveMisses(learnerContext, targetIdentity, voiceState?.sessionStartedAt);
+  const coachPreferencePolicy = resolveCoachPreferencePolicy(learnerContext);
+  // takeQuality is built BEFORE the policy so the capture_only latch can be
+  // gated on real take usability (2026-07-28): an ASR-side capture fault on an
+  // acoustically usable take must not force the breather early-return.
+  const takeQuality = buildTakeQuality(voiceState, captureReliability, safety);
+  // Take evidence is also needed by the policy (2026-07-28): a turn carrying a
+  // fresh, scored take must not let the text classifiers read the take's own
+  // transcript as chit-chat. Computed once here; Step 6 reuses it for the
+  // acknowledge_win praise guard.
+  const takeEvidence = assessTakeEvidence(voiceState, nowValue);
+  const policy = resolvePolicy({
+    practiceMode: mode,
+    safetyState: safety.state,
+    captureReliability,
+    userMessage,
+    scenarioPolicy,
+    lessonState,
+    consecutiveMisses: resolvedMisses,
+    takeUsable: takeQuality.usable,
+    hasUsableTake: takeQuality.usable && takeEvidence.usable,
+  });
+  const effectivePolicy = {
+    ...policy,
+    shouldCorrect: policy.shouldCorrect && measurementValidity.usableForScoring,
+    maxCueCount: coachPreferencePolicy.maxCueCount == null
+      ? policy.maxCueCount
+      : Math.min(policy.maxCueCount, coachPreferencePolicy.maxCueCount),
+  };
+
+  // Step 4: Issue detection (deterministic; per-kind honest-mirror filtering)
+  const issues = effectivePolicy.shouldCorrect ? detectIssues(voiceState, mode, { takeKind }) : {
+    primaryIssue: null,
+    secondaryIssue: null,
+    confidence: 0,
+    plainEvidence: '',
+  };
+
+  // Step 5: Personalization (deterministic)
+  const recentWin = detectRecentWin(voiceState, learnerContext, targetIdentity);
+  const currentLesson = resolveCurrentLesson(lessonState);
+  // v2/v4 learner memo is built AFTER the focus axis is resolved (Step 7) so the
+  // whatWorked selection can be RELEVANCE-FIRST against the current focus.
+
+  // Step 6: Resolve intent + coach move (v1-compatible). The take-evidence
+  // guard keeps acknowledge_win honest: praise only on a fresh, measured take.
+  // (takeEvidence itself was computed above, before the policy decision.)
+  const intentWitness = {};
+  const intent = !measurementValidity.usableForScoring
+    ? 'repair_capture'
+    : resolveIntent(effectivePolicy, issues, safety, takeEvidence, intentWitness, takeQuality.usable);
+  if (!measurementValidity.usableForScoring) {
+    intentWitness.praiseGuard = `suppressed:${measurementValidity.reasons[0] || 'measurement_unavailable'}`;
+  }
+  const coachMove = buildCoachMove({ intent, issues, safety, mode, voiceState });
+
+  // Step 7: v2 decision blocks
+  const metrics = summary.metrics || {};
+  const advanced = metrics?.advanced || {};
+  const quality = advanced.quality || {};
+  const formantLite = advanced.formantLite || {};
+  const inputRuntime = voiceState?.voiceInputRuntime || {};
+  const listeningEvidence = inputRuntime?.lastTurnEvidence
+    && typeof inputRuntime.lastTurnEvidence === 'object'
+    ? inputRuntime.lastTurnEvidence
+    : null;
+  const targetProfile = voiceState?.targetVoiceProfile || {};
+
+  // Step 7b (2026-07-26 phase B): per-section localization. ADVISORY — it does
+  // not feed intent, policy, issues, or safety on this wave.
+  //
+  // The freshness gate is respected STRUCTURALLY, not by a second check: Step -1
+  // already rebound `voiceState` through withTakeEvidenceAbsent when the take was
+  // stale, which nulls `lastAttemptArtifact`. Reading the timeline off that
+  // rebound state means a stale take cannot produce sections even in principle.
+  // Do not "optimize" this by reading the pre-gate artifact.
+  const sectionTimeline = voiceState?.lastAttemptArtifact?.timeline || null;
+  const takeSectionsResult = (Array.isArray(sectionTimeline) && Array.isArray(cardTokens) && cardTokens.length > 0)
+    ? scoreTakeSections({
+      timeline: sectionTimeline,
+      tokens: cardTokens,
+      target: {
+        pitchFloorHz: metricContract.target.pitchFloorHz,
+        pitchCeilingHz: metricContract.target.pitchCeilingHz,
+        resonanceFloor: metricContract.target.resonanceFloor,
+        resonanceCeiling: metricContract.target.resonanceCeiling,
+        weightFloor: metricContract.target.weightFloor,
+        weightCeiling: metricContract.target.weightCeiling,
+      },
+      durationMs: toFiniteOrNull(summary.durationMs)
+        ?? toFiniteOrNull(voiceState?.lastAttemptArtifact?.durationMs),
+      metrics: advanced,
+    })
+    : null;
+
+  const targetFit = buildTargetFit(voiceState, summary, advanced, quality, targetProfile, { takeKind });
+  const targetFitStatuses = [
+    targetFit.pitch.status,
+    targetFit.resonance.status,
+    targetFit.weight.status,
+  ];
+  const uncertainAxisCount = targetFitStatuses.filter((status) => status === 'uncertain').length;
+  const metricContractFailures = [];
+  if (metricContract.measurementAvailable === false) {
+    metricContractFailures.push('measurement_unavailable');
+  }
+  if (metricContract.measurementAvailable !== false && !measurementValidity.usableForScoring) {
+    metricContractFailures.push('measurement_unusable_for_scoring', ...measurementValidity.reasons);
+  }
+  metricContractFailures.push(...metricContract.targetValidationFailures);
+  if (metricContract.measurementAvailable !== false && !metricContract.hasTargetContract) {
+    metricContractFailures.push('missing_target_contract');
+  }
+  if (metricContract.measurementAvailable === true && uncertainAxisCount === 3) {
+    metricContractFailures.push('all_target_axes_uncertain');
+  }
+  if (
+    toFiniteOrNull(advanced.hnrVoicedCoveragePct) === 0
+    && toFiniteOrNull(advanced.voicedFramePct) > 0
+  ) {
+    metricContractFailures.push('hnr_missing_for_voiced_take');
+  }
+
+  // Reference fit — compare learner to loaded reference voice (if any)
+  const referenceFit = measurementValidity.usableForScoring
+    ? buildReferenceFit(voiceState, {
+      meanPitchHz: metricContract.values.meanPitchHz,
+      resonanceMean: metricContract.values.resonanceMean,
+      weightMean: metricContract.values.weightMean,
+    })
+    : { enabled: false };
+
+  const focus = primaryIssueToFocus(issues.primaryIssue);
+  // v4 learner memo: compact name/stage/topics/whatWorked/lastReference + sense-of-
+  // time block, with whatWorked selected RELEVANCE-FIRST against the current focus
+  // axis. Crash-proof on missing fields; empty -> '' (omitted from the prompt).
+  const learnerMemo = buildLearnerMemo(learnerContext, {
+    currentAxis: focusToAxis(focus),
+    // 2026-07-26: lets the memo derive a Direction hint when the learner never
+    // stated one explicitly. Explicit profile direction still wins.
+    targetPreset,
+  });
+  const reason = buildDecisionReason(issues.primaryIssue, focus, issues.plainEvidence, targetFit);
+  const practiceLine = voiceState?.activeLine?.displayText || voiceState?.forecastPhrase || '';
+  const recommendedDrill = recommendDrillForFocus(focus, practiceLine, drillRegistry, targetFit);
+
+  // Avoid cues + success criteria
+  const scenarioAvoid = Array.isArray(scenarioPolicy?.avoidTopics) ? scenarioPolicy.avoidTopics : [];
+  const drillContraindications = Array.isArray(recommendedDrill?.contraindications)
+    ? recommendedDrill.contraindications
+    : [];
+  const avoidCues = buildAvoidCues(focus, safety, drillContraindications);
+
+  const successCriteria = buildSuccessCriteria(focus, targetFit);
+
+  // History + baseline deltas
+  const history = buildHistory(learnerContext, baseline, targetIdentity, voiceState?.sessionStartedAt);
+
+  // Adaptive action (v3): the policy already decided coach/adapt/breather/converse from
+  // mode + safety + conversation + lexical struggle (isMethodStalling on userMessage).
+  // Count-path refinement: when we'd otherwise coach but recent takes are FLAT (the
+  // current method isn't moving the needle), switch to 'adapt' — acknowledge + change
+  // the angle rather than re-push. Breather/converse are never overridden here.
+  let coachingAction = !measurementValidity.usableForScoring
+    ? 'breather'
+    : effectivePolicy.coachingAction;
+  if (coachingAction === 'coach' && history && history.trend === 'flat') {
+    coachingAction = 'adapt';
+  }
+
+  // takeQuality: built above, before the policy decision (the capture latch
+  // needs it). kindMetrics below consume it.
+
+  // safety mirror
+  const safetyMirror = buildSafetyMirror(policy, safety);
+
+  // 2026-07-27 pressed-into-band verdict for the gag + the witness below.
+  //
+  // WHY THIS IS A UNION AND NOT JUST THE FLAG. buildSignal's `summary` resolves as
+  // `voiceState?.lastSummary || {}`, while detectIssues resolves it as
+  // `lastSummary || lastAttemptArtifact?.summary || {}`. On a take carrying only the
+  // artifact summary the two buildTargetFit computations can therefore disagree, and
+  // the coach acts on the ISSUE. Taking the union fails LOUD: an unnecessary gag
+  // costs the coach three phrases it rarely needs, while a missing one lets it tell
+  // a pressing learner to go higher. The secondary slot is included because a
+  // strainRisk >= 0.8 take pushes this verdict to secondary while it is still true.
+  // (Flagged by independent review 2026-07-27; the divergent shape was not shown to
+  // be reachable on a live path, so this is hardening, not a fix.)
+  const pitchPressureVerdict = targetFit.pitch.successSuppressed === true
+    || issues.primaryIssue === 'pitch_pressed_in_band'
+    || issues.secondaryIssue === 'pitch_pressed_in_band';
+
+  // doNotSay (incl. the per-take-kind honesty entries)
+  const doNotSay = buildDoNotSay({
+    scenarioAvoid,
+    drillContraindications,
+    safety,
+    explicit: [...(Array.isArray(explicitDoNotSay) ? explicitDoNotSay : []), ...coachPreferencePolicy.doNotSay],
+    takeKind,
+    pitchPressure: pitchPressureVerdict,
+  });
+
+  // 2026-07-19: per-kind compact metric block + session scope. The strain
+  // thresholds used for the siren top-note flag are the SAME lenient pair the
+  // safety gate applied (witness carries them).
+  const kindMetrics = takeQuality.usable
+    ? buildKindMetrics(takeKind, {
+      metrics,
+      advanced,
+      quality,
+      formantLite,
+      targetProfile,
+      strainThresholds: safety.witness?.strain || null,
+    })
+    : {};
+  const resolvedScope = resolveSessionScope({ sessionScope, voiceState, learnerContext, now: nowValue });
+
+  // Compute new audioMetrics fields from advanced metrics
+  let pitchTargetOccupancy = toFiniteOrNull(advanced.pitchTargetOccupancyPct);
+  let phraseEndDropHz = toFiniteOrNull(advanced.phraseEndDropHz);
+  let phraseFinalDropSt = toFiniteOrNull(advanced.phraseFinalDropSemitones);
+  // 2026-07-19: spontaneous speech has no scripted line, so the contour-fit
+  // fields (phrase-final drop vs the line's contour) would lie — drop them.
+  if (takeKind === 'spontaneous') {
+    phraseEndDropHz = null;
+    phraseFinalDropSt = null;
+  }
+
+  // V1.5 strain guardian: resolve the compact strainWatch (explicit arg wins,
+  // else the value the runtime mirrored onto voiceState). Normalized to the
+  // documented shape; null when unavailable (the field is then simply absent).
+  const resolvedStrainWatch = normalizeStrainWatch(
+    strainWatch || (voiceState && voiceState.strainWatch) || null,
+  );
+
+  const signal = buildCoachingSignal({
+    mode,
+    styleTarget: targetPreset,
+    direction: resolveLearnerDirection(learnerContext)
+      || (metricContract.target.direction === 'feminine' ? 'feminizing' : null),
+    // Provenance for the renderer's Direction line. Deliberately STRICTER than
+    // `direction` above (which defaults an unknown preset to feminine so the
+    // metric contract has band orientation): a hint we SHOW must never be
+    // invented, so an unknown style yields null and the line is omitted.
+    directionSource: resolveCoachingDirection(learnerContext, targetPreset).source,
+    userUtterance: userMessage,
+    practiceLine,
+
+    audioMetrics: {
+      breathyRisk: toFiniteOrNull(quality.breathyRisk),
+      strainRisk: toFiniteOrNull(quality.strainRisk),
+      harmonicRatioMean: toFiniteOrNull(advanced.harmonicRatioMean),
+      spectralTiltMeanDbPerOct: toFiniteOrNull(advanced.spectralTiltMeanDbPerOct),
+      f1MedianHz: toFiniteOrNull(formantLite.f1MedianHz),
+      f2MedianHz: toFiniteOrNull(formantLite.f2MedianHz),
+      frontnessScore: toFiniteOrNull(formantLite.frontnessScore),
+      cppsLike: toFiniteOrNull(quality.cppsLike),
+      harmonicStrength: toFiniteOrNull(quality.harmonicStrength),
+      stabilityMean: toFiniteOrNull(advanced.stabilityMean),
+      jitterLocal: toFiniteOrNull(quality.jitterLocal),
+      jitterRap: toFiniteOrNull(quality.jitterRap),
+      shimmerLocal: toFiniteOrNull(quality.shimmerLocal),
+      shimmerApq3: toFiniteOrNull(quality.shimmerApq3),
+      // v2 new
+      pitchTargetOccupancy,
+      phraseFinalDropHz: phraseEndDropHz,
+      phraseFinalDropSemitones: phraseFinalDropSt,
+    },
+
+    capture: {
+      reliability: captureReliability,
+      asrConfidence: inputRuntime.lastTranscriptConfidence != null
+        ? (inputRuntime.lastTranscriptConfidence > 0.7 ? 'high' : inputRuntime.lastTranscriptConfidence > 0.4 ? 'medium' : 'low')
+        : 'unknown',
+      voicedCoverage: advanced.voicedFramePct != null
+        ? (advanced.voicedFramePct > 0.7 ? 'good' : advanced.voicedFramePct > 0.45 ? 'fair' : 'poor')
+        : 'unknown',
+      semanticStatus: listeningEvidence?.semantic || null,
+      acousticStatus: listeningEvidence?.acoustic || null,
+      resolution: listeningEvidence?.resolution || null,
+    },
+
+    policy: {
+      shouldCorrect: effectivePolicy.shouldCorrect,
+      maxCueCount: effectivePolicy.maxCueCount,
+      avoidTopics: effectivePolicy.avoidTopics,
+      safetyState: safety.state,
+      conversationPriority: effectivePolicy.conversationPriority,
+      coachingAction,
+    },
+
+    observation: {
+      primaryIssue: issues.primaryIssue,
+      secondaryIssue: issues.secondaryIssue,
+      confidence: issues.confidence,
+      plainEvidence: issues.plainEvidence,
+    },
+
+    coachMove,
+
+    personalization: {
+      recentWin,
+      currentLesson,
+      preferredTone: coachPreferencePolicy.preferredTone,
+      // v2 learner memo: the compact memo text (empty string when no memo data),
+      // plus its structured fields for downstream consumers (greeting route).
+      learnerMemo: learnerMemo.text,
+      learnerMemoFields: learnerMemo.fields,
+      preferencePolicy: coachPreferencePolicy,
+      // This is application-derived spaced-repetition state, not authority
+      // parsed from free-form memo text. The renderer can therefore make the
+      // due concept the one lesson focus without treating learner data as a
+      // prompt instruction.
+      dueReviewFocus: learnerMemo.fields.reviewNext[0] || null,
+    },
+
+    takeQuality,
+    targetFit,
+    referenceFit,
+    coachingDecision: {
+      primaryFocus: focus,
+      reason,
+      recommendedDrill,
+      avoidCues,
+      successCriteria,
+      intent,
+    },
+    safety: safetyMirror,
+    history,
+    doNotSay,
+    takeKind,
+    kindMetrics,
+    sessionScope: resolvedScope,
+    // 2026-07-30 cue carry-forward: the cue the PREVIOUS coach turn gave, read
+    // straight off the persisted voice state (the runtime stamps it at the end
+    // of every coach turn — stampLastCueGiven). Deliberately read here, BEFORE
+    // this turn's stamp overwrites it, so `previousCue` and `recommendedDrill`
+    // are always one turn apart and never the same object.
+    previousCue: voiceState?.lastCueGiven || null,
+  });
+
+  // V1.5: attach strainWatch as an additive top-level field (only when present,
+  // so existing signal shape/consumers are untouched when there's no guardian
+  // data). The live LLM reads this to acknowledge fatigue naturally.
+  if (resolvedStrainWatch) {
+    signal.strainWatch = resolvedStrainWatch;
+  }
+
+  // 2026-07-27 pressed-into-band witness. Additive top-level block, same pattern as
+  // strainWatch above and takeSections below, because signal-schema.js rebuilds
+  // targetFit from named keys and would drop these fields off targetFit.pitch.
+  //
+  // Attached ONLY when the signature fired, so a take without it carries no new key
+  // at all. MEASURED scope of "unchanged": a clean in-band take with no falling
+  // pitch trajectory is deepStrictEqual to the pre-change signal. A take whose
+  // pitchTrajectory is falling DOES differ, in one intended place — the
+  // pitch_falling_at_end evidence line was rewritten to name the breath cause, so
+  // observation.plainEvidence and coachingDecision.reason carry the new wording.
+  // Nothing else about a non-pressed take changes.
+  // The behavioural change on a pressed take travels through the ISSUE
+  // (observation.primaryIssue = 'pitch_pressed_in_band'), not through this block;
+  // this block exists so the renderer, the policy gates and section-loop's
+  // readAxisVerdict can consume the verdict WITHOUT another DSP pass once their
+  // owners add it (none of those files are edited here).
+  //
+  // WHY THERE IS NO LOUDNESS CORRELATE. Rising subglottal pressure raises SPL as
+  // well as F0 (~9-11 dB per doubling), so loudness is the natural second half of
+  // the signature — but `meanLoudnessDb` on the advanced block is uncalibrated dBFS
+  // off the capture chain, not SPL. Turning it into evidence needs a fixed
+  // microphone gain and mouth-to-mic distance (neither is fixed or recorded here),
+  // or a same-session, same-calibration loudness baseline to difference against —
+  // and the only baseline this module can reach is already known to be
+  // calibration-hazardous (isBaselineCalibrationComparable). An absolute dB bar on
+  // an uncalibrated level would be an invented number, so none is written.
+  if (pitchPressureVerdict) {
+    signal.pitchPressure = {
+      signature: true,
+      reason: targetFit.pitch.suppressionReason || 'pressure_signature',
+      correlates: [...targetFit.pitch.pressureCorrelates],
+      pitchStatus: targetFit.pitch.status,
+      // Which path asserted it — 'both' is the normal case. 'issue' alone means the
+      // two summary resolutions diverged (see the pitchPressureVerdict note above),
+      // and is the only case in which `correlates` can be short or empty.
+      assertedBy: targetFit.pitch.successSuppressed === true ? 'both' : 'issue',
+      // The pitch number is technically in-band; it must not be reported as a pass.
+      successSuppressed: true,
+    };
+  }
+
+  // 2026-07-26 phase B: additive top-level sections block, present ONLY when a
+  // fresh take AND card tokens were both available.
+  //
+  // READ BEFORE CONSUMING `worst`. It is NOT null merely because a gate failed —
+  // it stays POPULATED (text, axis, direction, margin, score) for diagnostics and
+  // carries `confident: false`. `worst.confident === true` is the ONLY safe
+  // predicate for naming a fragment to a learner; a bare `if (worst)` will blame
+  // a fragment on thin evidence, a tie, or an unusable measurement. Five gates
+  // guard it (evidence on the blamed axis, margin over a measured rival,
+  // measurement usability, localization, and a nameable fragment) — see
+  // coaching/section-scorer.js.
+  // `worst: null` means only that nothing scored above zero at all.
+  if (takeSectionsResult) {
+    signal.takeSections = {
+      worst: takeSectionsResult.worst,
+      sectionCount: takeSectionsResult.sections.length,
+      alignment: takeSectionsResult.alignment,
+    };
+  }
+
+  // 2026-07-28: repeat support. The sanitizer's meta-question responder
+  // re-speaks this verbatim when the learner asks the tutor to "say that
+  // again"; the runtime persists it per coach turn. Never reaches the model —
+  // the renderer builds its prompt from named fields only.
+  signal.lastCoachMessage = typeof voiceState?.lastCoachMessage === 'string'
+    ? voiceState.lastCoachMessage.trim().slice(0, 240) || null
+    : null;
+
+  // 2026-07-18 witness: additive top-level record of this turn's gate decisions
+  // (threshold source + strike counts, praise-guard outcome, misses count). The
+  // renderer builds its prompt from named fields only, so this NEVER reaches the
+  // model; the runtime logs one structured line from it per coach turn.
+  signal.decisionWitness = {
+    safety: safety.witness || {},
+    // 2026-07-28: the capture-latch context the coach_gates journal was missing —
+    // a capture_only turn logged thresholds and praise_guard but never WHY the
+    // latch was on (safety.reasons) or the derived capture reliability level.
+    safetyState: safety.state,
+    safetyReasons: Array.isArray(safety.reasons) ? safety.reasons.slice(0, 8) : [],
+    captureReliability,
+    intent: {
+      resolved: intent,
+      praiseGuard: intentWitness.praiseGuard || null,
+      takeEvidence: {
+        hasMetrics: takeEvidence.hasMetrics,
+        ageMs: takeEvidence.ageMs,
+        usable: takeEvidence.usable,
+        reason: takeEvidence.reason,
+      },
+      // Defect 3: whether this turn judged a take from THIS turn window, and
+      // why not when it did not. `fresh:true, reason:'window_unknown'` is the
+      // ungated legacy path and is the healthy default for callers that do not
+      // track turn windows.
+      takeFreshness: {
+        fresh: takeFreshness.fresh,
+        reason: takeFreshness.reason,
+        gated: !takeFreshness.fresh,
+      },
+    },
+    consecutiveMisses: resolvedMisses,
+    missesSource: hasExplicitMisses ? 'explicit' : 'derived',
+    // 2026-07-19 zero-friction wave: what kind of take drove this turn, where
+    // the kind came from, which kindMetrics fields actually resolved (non-null),
+    // the strain interpretation applied (standard | vocalise-lenient), and the
+    // analyzer profile echo (B-DSP sets analysisProfile when formants were
+    // skipped) — so a null F2 on a resonance_play take is explainable.
+    takeKind: {
+      kind: takeKind,
+      source: resolvedTakeKind.source,
+      metricsFields: Object.keys(kindMetrics).filter((k) => kindMetrics[k] != null),
+      analysisProfile: typeof advanced.analysisProfile === 'string' ? advanced.analysisProfile : null,
+    },
+    strainInterpretation: safety.witness?.strain?.interpretation || 'standard',
+    sessionScope: resolvedScope,
+    // 2026-07-26 phase B: present ONLY when sections were actually computed, so a
+    // takeless turn logs zero extra fields (the runtime spreads these into the
+    // existing coach_gates line rather than emitting a new event).
+    ...(takeSectionsResult ? {
+      takeSections: {
+        sectionCount: takeSectionsResult.sections.length,
+        alignment: takeSectionsResult.alignment,
+        worstTokenStart: takeSectionsResult.worst?.tokenStart ?? null,
+        worstTokenEnd: takeSectionsResult.worst?.tokenEnd ?? null,
+        worstAxis: takeSectionsResult.worst?.axis ?? null,
+        worstConfident: takeSectionsResult.worst?.confident ?? false,
+      },
+    } : {}),
+    metricContract: {
+      measurementAvailable: metricContract.measurementAvailable,
+      measurementRejectionReasons: [...new Set([
+        ...metricContract.measurementRejectionReasons,
+        ...measurementValidity.reasons,
+      ])],
+      analysisVersion: typeof summary.analysisVersion === 'string' ? summary.analysisVersion : null,
+      sampleCount: toFiniteOrNull(advanced.sampleCount),
+      voicedFramePct: toFiniteOrNull(advanced.voicedFramePct),
+      confidentFramePct: toFiniteOrNull(advanced.confidentFramePct),
+      scoreConfidence: toFiniteOrNull(advanced.scoreConfidence),
+      captureReliability: toFiniteOrNull(advanced.captureReliability),
+      snrDb: toFiniteOrNull(advanced.snrDb),
+      clippingPct: toFiniteOrNull(advanced.clippingPct),
+      pitchValidFrameCount: toFiniteOrNull(advanced.pitchValidFrameCount),
+      targetContractPresent: metricContract.hasTargetContract,
+      targetPreset: (summary.targetPreset || voiceState?.targetPreset) || null,
+      targetSource: metricContract.target.source,
+      targetProfileId: metricContract.target.targetProfileId,
+      targetIdentityPresent: Boolean(metricContract.target.targetKey),
+      targetIdentityFailures: metricContract.targetIdentityFailures,
+      targetDirection: metricContract.target.direction,
+      targetBands: {
+        pitchFloorHz: metricContract.target.pitchFloorHz,
+        pitchCeilingHz: metricContract.target.pitchCeilingHz,
+        resonanceFloor: metricContract.target.resonanceFloor,
+        resonanceCeiling: metricContract.target.resonanceCeiling,
+        weightFloor: metricContract.target.weightFloor,
+        weightCeiling: metricContract.target.weightCeiling,
+      },
+      uncertainAxisCount,
+      legacyMetricFields: metricContract.legacyMetricFields,
+      hnrValidFrameCount: toFiniteOrNull(advanced.hnrValidFrameCount),
+      hnrVoicedCoveragePct: toFiniteOrNull(advanced.hnrVoicedCoveragePct),
+      failures: [...new Set(metricContractFailures)],
+    },
+  };
+  return signal;
+}
+
+// V1.5 strain guardian: normalize the strainWatch field to its documented shape
+// ({ recentFlags, sessionMinutes, ... }). Returns null when there's nothing
+// usable so the field stays absent rather than carrying an empty object.
+function normalizeStrainWatch(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const recentFlags = Number(value.recentFlags);
+  const sessionMinutes = Number(value.sessionMinutes);
+  const hasRecent = Number.isFinite(recentFlags);
+  const hasMinutes = Number.isFinite(sessionMinutes);
+  if (!hasRecent && !hasMinutes) return null;
+  const out = {
+    recentFlags: hasRecent ? Math.max(0, Math.round(recentFlags)) : 0,
+    sessionMinutes: hasMinutes ? Math.max(0, Number(sessionMinutes.toFixed(2))) : 0,
+  };
+  if (Number.isFinite(Number(value.strainedTotal))) out.strainedTotal = Math.max(0, Math.round(Number(value.strainedTotal)));
+  if (Number.isFinite(Number(value.takeCount))) out.takeCount = Math.max(0, Math.round(Number(value.takeCount)));
+  return out;
+}
+
+module.exports = {
+  buildSignal,
+  normalizeStrainWatch,
+  buildLearnerMemo,
+  resolveCoachPreferencePolicy,
+  pickBaseline,
+  buildContinuityGreeting,
+  // 2026-07-29 L3 (TTS latency): the starter drill instructions per focus
+  // axis, for the session-start TTS pre-warm (the drill bodies the direct
+  // composer actually speaks).
+  listStarterDrillInstructions,
+  // v4 tutor-memory helpers (exported for tests + reuse).
+  focusToAxis,
+  selectWhatWorked,
+  deriveFocusHistory,
+  daysBetween,
+  describeGap,
+  detectIssues,
+  detectRecentWin,
+  // 2026-07-18 truth+safety wave (exported for tests + reuse).
+  assessTakeEvidence,
+  deriveConsecutiveMisses,
+  FRESH_TAKE_MAX_AGE_MS,
+  // 2026-07-26 stale-take gate (Defect 3).
+  resolveTakeEvidenceFreshness,
+  withTakeEvidenceAbsent,
+  buildTargetFit,
+  // 2026-07-27 pressed-into-band composition (exported for tests + reuse).
+  detectPitchPressureSignature,
+  PRESSED_TILT_FLAT_DB_PER_OCT,
+  PRESSED_MIN_CORRELATES,
+  resolveMetricContract,
+  buildReferenceFit,
+  buildHistory,
+  // 2026-07-26 v4 baseline honesty (exported for tests + reuse).
+  BASELINE_RECALIBRATED_NOTE,
+  isBaselineCalibrationComparable,
+  buildTakeQuality,
+  primaryIssueToFocus,
+  recommendDrillForFocus,
+  // Exported for the direction-survival guard test: every cue this produces is
+  // spoken to a learner whose direction it cannot see, so each must survive the
+  // cross-direction stripper in BOTH directions.
+  buildCoachMove,
+  resolveCoachingDirection,
+  deriveDirectionHintFromTarget,
+  emitCoachWitness,
+  buildAvoidCues,
+  buildSuccessCriteria,
+  buildDoNotSay,
+  // 2026-07-19 zero-friction wave (exported for tests + reuse).
+  resolveTakeKind,
+  normalizeTakeKindToken,
+  // 2026-07-26 field repair: the engine's own structured prescription surface.
+  resolveEngineRecommendedTakeKind,
+  buildKindMetrics,
+  resolveSessionScope,
+  resolveRingTierForDaypart,
+  resolveSessionsRing,
+  daypartOf,
+  KIND_SUPPRESSED_ISSUES,
+  TAKE_KIND_DO_NOT_SAY,
+  COACH_ENTRY_POLICY,
+  FOCUS_AXES,
+  PITCH_STATUSES,
+  RESONANCE_STATUSES,
+  WEIGHT_STATUSES,
+  TAKE_KINDS,
+  SESSION_TIERS,
+};

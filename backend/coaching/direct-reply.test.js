@@ -1,0 +1,420 @@
+'use strict';
+
+// 2026-07-28 Phase 0 deterministic-first rendering — the SHADOW composer.
+// Contracts under test:
+//   1. Per-composer shape: covered intents compose; unknown axis/intent,
+//      converse, and question-shaped/off-script utterances return null.
+//   2. Property: every composed reply crosses sanitizeCoachReply UNCHANGED
+//      (100% law-clean by construction).
+//   3. Repetition defense: take-varying numbers + rotation pools with recency
+//      exclusion — no identical consecutive replies across a 5-take sequence.
+//   4. Shadow wiring: 'shadow' reports directReplyShadow while the model still
+//      serves; 'off' never computes (byte-identical legacy); 'on' serves the
+//      composer line like a deterministicReply.
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+
+const { buildDirectReply } = require('./direct-reply');
+const { sanitizeCoachReply } = require('./sanitizer');
+const { coachingTurn } = require('./index');
+const { resolveVoiceStandaloneConfig } = require('../voice-standalone-config');
+
+const DRILL = 'Start on a small "mm" hum with the lips lightly together, then open the jaw into the words without letting the pitch fall back down.';
+
+function coachSignal(overrides = {}) {
+  return {
+    coachingDecision: {
+      intent: 'single_actionable_cue',
+      primaryFocus: 'pitch_floor',
+      reason: 'How low the voice dips is going below the target.',
+      recommendedDrill: { instruction: DRILL },
+    },
+    policy: { coachingAction: 'coach', shouldCorrect: true, avoidTopics: [] },
+    history: { last3TakeSummary: 't1: 158Hz/60% · t2: 165Hz/65%', trend: 'improving' },
+    practiceLine: 'how was your day',
+    takeKind: 'phrase',
+    userUtterance: '',
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 1. Per-composer shape
+// ---------------------------------------------------------------------------
+
+test('single_actionable_cue composes: trend opener + live numbers + drill', () => {
+  const witness = {};
+  const text = buildDirectReply(coachSignal(), { witness });
+  assert.match(text, /moved the right way|Good movement|That is the direction/);
+  // Raw hertz is banned from speech (plain-language product law).
+  assert.doesNotMatch(text, /\bHz\b/);
+  assert.match(text, new RegExp(DRILL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(witness.composerId, 'single_actionable_cue');
+  assert.equal(witness.intent, 'single_actionable_cue');
+  assert.ok(witness.templateId);
+  // The spoken clamp: <= 2 sentences, <= 45 words.
+  assert.ok(text.split(/(?<=[.!?])\s+/).length <= 2);
+  assert.ok(text.split(/\s+/).length <= 45);
+});
+
+test('adapt, gentle, acknowledge_win, stop_and_reset, breather, lesson_transition compose', () => {
+  const adapt = buildDirectReply(coachSignal({
+    policy: { coachingAction: 'adapt', shouldCorrect: true, avoidTopics: [] },
+  }));
+  assert.match(adapt, /not landing|Different approach|another way/);
+
+  const gentle = buildDirectReply(coachSignal({
+    policy: { coachingAction: 'gentle', shouldCorrect: true, avoidTopics: [] },
+  }));
+  assert.match(gentle, /Nice and easy|Gently now|Soft and slow/);
+
+  const win = buildDirectReply(coachSignal({
+    coachingDecision: { intent: 'acknowledge_win' },
+  }));
+  assert.match(win, /landed|Better again|step the right way/);
+  assert.match(win, /"how was your day"/);
+
+  const reset = buildDirectReply(coachSignal({
+    coachingDecision: { intent: 'stop_and_reset' },
+    policy: { coachingAction: 'breather', shouldCorrect: false, avoidTopics: [] },
+  }));
+  assert.match(reset, /gentle hum|hum quietly|light hum/);
+
+  const breather = buildDirectReply(coachSignal({
+    coachingDecision: { intent: 'continue_conversation' },
+    policy: { coachingAction: 'breather', shouldCorrect: false, avoidTopics: [] },
+  }));
+  assert.match(breather, /listening|alright|No drill/);
+
+  const lesson = buildDirectReply(coachSignal({
+    coachingDecision: { intent: 'lesson_transition' },
+    policy: { coachingAction: 'converse', shouldCorrect: false, avoidTopics: [] },
+    personalization: { currentLesson: 'Soft starts' },
+  }));
+  assert.equal(lesson, 'Next up: Soft starts — one small thing at a time.');
+});
+
+test('null cases: converse, repair_capture, unknown focus, unknown intent, vocalise, missing drill', () => {
+  assert.equal(buildDirectReply(coachSignal({
+    coachingDecision: { intent: 'continue_conversation' },
+    policy: { coachingAction: 'converse', shouldCorrect: false, avoidTopics: [] },
+  })), null);
+  assert.equal(buildDirectReply(coachSignal({
+    coachingDecision: { intent: 'repair_capture' },
+  })), null);
+  assert.equal(buildDirectReply(coachSignal({
+    coachingDecision: { intent: 'single_actionable_cue', primaryFocus: 'nonsense_axis', recommendedDrill: { instruction: DRILL } },
+  })), null);
+  assert.equal(buildDirectReply(coachSignal({
+    coachingDecision: { intent: 'single_actionable_cue', primaryFocus: 'pitch_floor', recommendedDrill: { instruction: '' } },
+  })), null);
+  assert.equal(buildDirectReply(coachSignal({ takeKind: 'hum_sovt' })), null);
+  assert.equal(buildDirectReply(null), null);
+});
+
+test('hybrid escalation: question-shaped and meta-question utterances return null', () => {
+  assert.equal(buildDirectReply(coachSignal({ userUtterance: 'why is my voice tired?' })), null);
+  assert.equal(buildDirectReply(coachSignal({ userUtterance: 'how does this work' })), null);
+  assert.equal(buildDirectReply(coachSignal({ userUtterance: 'what is the practice sentence?' })), null);
+  assert.equal(buildDirectReply(coachSignal({
+    userUtterance: 'say that again',
+    lastCoachMessage: 'Let your shoulders drop.',
+  })), null);
+  // ...but a question-form drill line is the TAKE, not a question — it composes.
+  const onScript = buildDirectReply(coachSignal({
+    practiceLine: 'could you say that again?',
+    userUtterance: 'could you say that again?',
+  }));
+  assert.ok(onScript);
+});
+
+// ---------------------------------------------------------------------------
+// 2. Property: law-clean by construction
+// ---------------------------------------------------------------------------
+
+test('property: every composed reply crosses sanitizeCoachReply UNCHANGED', () => {
+  const fixtures = [
+    coachSignal(),
+    coachSignal({ history: { last3TakeSummary: '', trend: 'flat' } }),
+    coachSignal({ history: { last3TakeSummary: 't1: 200Hz/40% · t2: 190Hz/30%', trend: 'fatiguing' } }),
+    coachSignal({ history: null }),
+    coachSignal({ practiceLine: '' }),
+    coachSignal({ practiceLine: 'a'.repeat(90) }),
+    coachSignal({ policy: { coachingAction: 'adapt', shouldCorrect: true, avoidTopics: [] } }),
+    coachSignal({ policy: { coachingAction: 'gentle', shouldCorrect: true, avoidTopics: [] } }),
+    coachSignal({ coachingDecision: { intent: 'acknowledge_win' } }),
+    coachSignal({
+      coachingDecision: { intent: 'stop_and_reset' },
+      policy: { coachingAction: 'breather', shouldCorrect: false, avoidTopics: [] },
+    }),
+    coachSignal({
+      coachingDecision: { intent: 'continue_conversation' },
+      policy: { coachingAction: 'breather', shouldCorrect: false, avoidTopics: [] },
+    }),
+    coachSignal({
+      coachingDecision: { intent: 'lesson_transition' },
+      policy: { coachingAction: 'converse', shouldCorrect: false, avoidTopics: [] },
+      personalization: { currentLesson: 'Soft starts' },
+    }),
+    coachSignal({
+      coachingDecision: {
+        intent: 'single_actionable_cue',
+        primaryFocus: 'vocal_weight',
+        reason: 'The sound is heavier than the target — more rumble than it needs.',
+        recommendedDrill: { instruction: 'Let your shoulders drop and the jaw stay loose, then start each word more softly.' },
+      },
+    }),
+    coachSignal({
+      coachingDecision: {
+        intent: 'single_actionable_cue',
+        primaryFocus: 'resonance_forward',
+        reason: 'The tongue is sitting too far back — the mouth shape needs to come forward.',
+        recommendedDrill: { instruction: 'Hum the line on "m" or "n" first and feel the buzz on your lips, then open into the words.' },
+      },
+    }),
+    // 2026-07-30 cue carry-forward: the win that NAMES the previous turn's cue.
+    // Every code-owned action clause is swept by voice-cue-carry.test.js; these
+    // two keep the branch inside this file's own law-clean property.
+    coachSignal({
+      coachingDecision: { intent: 'acknowledge_win' },
+      previousCue: { id: 'starter-light-lift', axis: 'pitch_floor', instruction: DRILL },
+    }),
+    coachSignal({
+      coachingDecision: { intent: 'acknowledge_win' },
+      history: { last3TakeSummary: '', trend: 'fatiguing' },
+      previousCue: { id: 'starter-nasal-buzz', axis: 'resonance_forward', instruction: 'Hum the line on "m" or "n" first.' },
+    }),
+  ];
+  let composed = 0;
+  for (const signal of fixtures) {
+    const text = buildDirectReply(signal, {});
+    assert.ok(text, `fixture should compose: ${JSON.stringify(signal.coachingDecision?.intent)}`);
+    composed += 1;
+    assert.equal(
+      sanitizeCoachReply(text, signal),
+      text,
+      `reply not law-clean: ${text}`,
+    );
+  }
+  assert.equal(composed, fixtures.length);
+});
+
+// ---------------------------------------------------------------------------
+// 3. Repetition defense
+// ---------------------------------------------------------------------------
+
+test('repetition: a 5-take sequence with varying metrics never repeats a reply', () => {
+  const replies = [];
+  const thread = [];
+  const readings = [[150, 158], [158, 165], [165, 163], [163, 170], [170, 176]];
+  for (const [prev, latest] of readings) {
+    const signal = coachSignal({
+      history: { last3TakeSummary: `t1: ${prev}Hz/60% · t2: ${latest}Hz/65%`, trend: 'improving' },
+    });
+    const text = buildDirectReply(signal, { conversationHistory: thread });
+    assert.ok(text);
+    replies.push(text);
+    thread.push({ role: 'assistant', content: text });
+  }
+  for (let i = 1; i < replies.length; i += 1) {
+    assert.notEqual(replies[i], replies[i - 1], `replies ${i - 1} and ${i} must differ`);
+  }
+});
+
+test('repetition: recency exclusion skips a template whose text was just served', () => {
+  const signal = coachSignal({ history: { last3TakeSummary: '', trend: 'improving' } });
+  const first = buildDirectReply(signal, {});
+  // Same numbers (so interpolation cannot vary): the rotation pool must move.
+  const second = buildDirectReply(signal, {
+    conversationHistory: [{ role: 'assistant', content: first }],
+  });
+  assert.notEqual(second, first, 'the just-served template is excluded');
+  const third = buildDirectReply(signal, {
+    conversationHistory: [
+      { role: 'assistant', content: first },
+      { role: 'assistant', content: second },
+    ],
+  });
+  assert.notEqual(third, first);
+  assert.notEqual(third, second);
+});
+
+// ---------------------------------------------------------------------------
+// 4. Shadow wiring (coachingTurn — the buffered switch point)
+// ---------------------------------------------------------------------------
+
+function makeTurnOptions(mode) {
+  return {
+    voiceState: {
+      // A clear pitch-floor miss on a usable measurement: the turn resolves
+      // single_actionable_cue with the pitch_floor starter drill (the "mm"
+      // hum instruction).
+      lastSummary: {
+        target: {
+          source: 'built-in',
+          targetPreset: 'cute-feminine',
+          direction: 'feminine',
+          pitchFloorHz: 188,
+          pitchCeilingHz: 255,
+        },
+        metrics: {
+          meanPitchHz: 130,
+          targetHitPct: 0.05,
+          advanced: {
+            pitchP10Hz: 120,
+            pitchP90Hz: 140,
+            scoreConfidence: 0.9,
+            voicedFramePct: 0.9,
+            confidentFramePct: 0.9,
+            captureReliability: 0.9,
+            pitchValidFrameCount: 100,
+          },
+        },
+      },
+      lastAttemptArtifact: { finalizedAt: Date.now() },
+    },
+    userMessage: '',
+    conversationHistory: [],
+    callModel: async () => 'MODEL REPLY',
+    directReplyMode: mode,
+  };
+}
+
+test("shadow wiring: 'off' never computes — no witness, legacy behavior", async () => {
+  const result = await coachingTurn(makeTurnOptions('off'));
+  assert.equal(result.directReplyShadow, null);
+  assert.equal(result.rawReply, 'MODEL REPLY');
+});
+
+test("shadow wiring: 'shadow' reports the witness and STILL serves the model", async () => {
+  const result = await coachingTurn(makeTurnOptions('shadow'));
+  assert.equal(result.rawReply, 'MODEL REPLY', 'the LLM still serves in shadow');
+  const shadow = result.directReplyShadow;
+  assert.ok(shadow, 'shadow witness present');
+  assert.equal(shadow.composer_id, 'single_actionable_cue');
+  assert.equal(shadow.intent, 'single_actionable_cue');
+  assert.ok(shadow.template_id);
+  assert.match(shadow.text, /mm" hum/);
+  assert.equal(shadow.practice_line_present, false);
+  assert.equal(shadow.would_have_served, true);
+});
+
+test("shadow wiring: 'on' serves the composer line like a deterministicReply", async () => {
+  let modelCalled = false;
+  const options = makeTurnOptions('on');
+  options.callModel = async () => { modelCalled = true; return 'MODEL REPLY'; };
+  const result = await coachingTurn(options);
+  assert.equal(modelCalled, false, 'the model is skipped when the composer serves');
+  assert.match(result.rawReply, /mm" hum/);
+  assert.equal(result.fallbackReply, false, 'engine-authored is not a fallback');
+  assert.equal(result.directReplyShadow, null, "'on' does not log a shadow witness");
+  // The served line crosses the same sanitizer as any model text.
+  assert.equal(result.sanitizedReply, result.rawReply);
+});
+
+test('shadow wiring: a turn the composer cannot answer stays on the model in every mode', async () => {
+  for (const mode of ['shadow', 'on']) {
+    const options = makeTurnOptions(mode);
+    options.userMessage = 'why is my voice tired?';
+    const result = await coachingTurn(options);
+    assert.equal(result.rawReply, 'MODEL REPLY', `${mode}: question turns stay on the LLM`);
+    assert.equal(result.directReplyShadow, null);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Config flag
+// ---------------------------------------------------------------------------
+
+test('voiceDirectReplyMode config: default off, env/option honored, garbage falls back', () => {
+  assert.equal(resolveVoiceStandaloneConfig({ env: {} }).voiceDirectReplyMode, 'off');
+  assert.equal(resolveVoiceStandaloneConfig({ env: { VOICE_DIRECT_REPLY_MODE: 'shadow' } }).voiceDirectReplyMode, 'shadow');
+  // Phase 1+2 armed 2026-07-29: 'on' passes through and serves composed replies.
+  assert.equal(resolveVoiceStandaloneConfig({ voiceDirectReplyMode: 'on', env: {} }).voiceDirectReplyMode, 'on');
+  assert.equal(resolveVoiceStandaloneConfig({ env: { VOICE_DIRECT_REPLY_MODE: 'on' } }).voiceDirectReplyMode, 'on');
+  assert.equal(resolveVoiceStandaloneConfig({ env: { VOICE_DIRECT_REPLY_MODE: 'banana' } }).voiceDirectReplyMode, 'off');
+});
+
+// ---------------------------------------------------------------------------
+// 2026-07-28 review-refinement fixtures (findings 1-6)
+// ---------------------------------------------------------------------------
+
+test('F1: jargon-bearing lesson titles escalate to the LLM, clean titles compose', () => {
+  const lessonSignal = (currentLesson) => coachSignal({
+    coachingDecision: { intent: 'lesson_transition' },
+    policy: { coachingAction: 'converse', shouldCorrect: false, avoidTopics: [] },
+    personalization: { currentLesson },
+  });
+  assert.equal(buildDirectReply(lessonSignal('Resonance Toward the Target')), null);
+  assert.equal(buildDirectReply(lessonSignal('Ease Vocal Weight')), null);
+  assert.equal(buildDirectReply(lessonSignal('Bright Forward Placement')), null);
+  assert.equal(
+    buildDirectReply(lessonSignal('Soft starts')),
+    'Next up: Soft starts — one small thing at a time.',
+  );
+});
+
+test('F2: off-script STATEMENTS escalate (the pain-report bug class stays dead)', () => {
+  for (const utterance of ['my throat hurts', 'i dont understand', 'that felt weird']) {
+    assert.equal(buildDirectReply(coachSignal({ userUtterance: utterance })), null, utterance);
+  }
+  // The app's own post-take engine message is NOT the learner speaking — the
+  // turn still composes.
+  const engineTurn = buildDirectReply(coachSignal({
+    userUtterance: 'Give me one concise post-take coaching note for the latest voice attempt.',
+  }));
+  assert.ok(engineTurn, 'engine post-take turn must compose');
+  // A take-feedback ask is off-script (not the practice line) and escalates —
+  // the model answers it, one LLM turn being the safe cost.
+  assert.equal(buildDirectReply(coachSignal({ userUtterance: 'how did that sound?' })), null);
+});
+
+test('F3: the drill body rotates through per-axis variants under recency exclusion', () => {
+  const signal = coachSignal({ history: { last3TakeSummary: '', trend: 'improving' } });
+  const thread = [];
+  for (let i = 0; i < 3; i += 1) {
+    const text = buildDirectReply(signal, { conversationHistory: thread });
+    assert.ok(text);
+    thread.push({ role: 'assistant', content: text });
+  }
+  // Three turns, no numbers to interpolate: three distinct full replies (the
+  // opener rotates AND the drill body rotates through its per-axis variants).
+  assert.equal(new Set(thread.map((entry) => entry.content)).size, 3);
+  assert.match(thread[1].content, /"oo"|"n" first|drop away from your ears|tongue raised|Hum the first word|Soften the shoulders/);
+});
+
+test('F4: a dirty card-ops practice line is cleaned or refused before quoting', () => {
+  // Ops fence + jargon noun: refused entirely (no quote, no fence in speech).
+  const refused = buildDirectReply(coachSignal({
+    coachingDecision: { intent: 'acknowledge_win' },
+    practiceLine: 'feel the resonance ```remember-ops {"x":1}',
+  }));
+  assert.ok(refused, 'the win still composes');
+  assert.doesNotMatch(refused, /resonance|remember-ops|```/);
+  // Jargon with a safe word-level swap is rewritten inside the quote.
+  const swapped = buildDirectReply(coachSignal({
+    coachingDecision: { intent: 'acknowledge_win' },
+    practiceLine: 'keep the pitch floor steady',
+  }));
+  assert.match(swapped, /low end of your pitch/);
+  assert.doesNotMatch(swapped, /pitch floor/);
+});
+
+test('F5: shadow-thread entries drive template rotation between shadow turns', async () => {
+  const first = await coachingTurn(makeTurnOptions('shadow'));
+  assert.ok(first.directReplyShadow);
+  // Wire the first shadow text into the next turn's history exactly as the
+  // runtime's rolling window does.
+  const options = makeTurnOptions('shadow');
+  options.conversationHistory = [
+    { role: 'assistant', content: first.directReplyShadow.text },
+  ];
+  const second = await coachingTurn(options);
+  assert.ok(second.directReplyShadow);
+  assert.notEqual(
+    second.directReplyShadow.template_id,
+    first.directReplyShadow.template_id,
+    'the shadow stream must exercise rotation, not pin pool[0]',
+  );
+});

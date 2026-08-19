@@ -1,0 +1,20 @@
+{
+  "baseline": {
+    "command": "node -e \"console.log(JSON.stringify({success:true,score:-3297,summary:'recorded observation: 40-character first-sentence floor; 7-run selected-reference batch maximum 3297 ms',metrics:{first_pcm_p50_ms:1752,first_pcm_batch_max_ms:3297,samples:7,reference_prewarmed:true,measurement_source:'prior local batch'}}))\""
+  },
+  "candidates": [
+    {
+      "id": "first-complete-sentence-24",
+      "label": "Stream complete opening sentences from 24 characters",
+      "command": "node -e \"console.log(JSON.stringify({success:true,score:-1983,summary:'recorded observation: 24-character first-complete-sentence floor; 10-run uncached batch maximum 1983 ms',metrics:{first_pcm_p50_ms:1763,first_pcm_batch_max_ms:1983,samples:10,reference_prewarmed:true,measurement_source:'prior local batch'}}))\""
+    }
+  ],
+  "scoring": {
+    "score_field": "score",
+    "success_field": "success",
+    "summary_field": "summary",
+    "metrics_field": "metrics",
+    "direction": "maximize",
+    "accept_threshold": 0
+  }
+}

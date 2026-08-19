@@ -1,0 +1,333 @@
+{
+  "playwright": true,
+  "playwrightFrom": "bare-import:playwright",
+  "target": "http://127.0.0.1:3021/app",
+  "widths": {
+    "360": {
+      "consoleErrors": [],
+      "consoleWarnings": [],
+      "pageErrors": [],
+      "failedRequests": [],
+      "overflow": {
+        "pageOverflows": false,
+        "scrollWidth": 360,
+        "clientWidth": 360,
+        "elements": []
+      },
+      "navError": null
+    },
+    "768": {
+      "consoleErrors": [],
+      "consoleWarnings": [],
+      "pageErrors": [],
+      "failedRequests": [],
+      "overflow": {
+        "pageOverflows": false,
+        "scrollWidth": 768,
+        "clientWidth": 768,
+        "elements": []
+      },
+      "navError": null
+    },
+    "1280": {
+      "consoleErrors": [],
+      "consoleWarnings": [],
+      "pageErrors": [],
+      "failedRequests": [],
+      "overflow": {
+        "pageOverflows": false,
+        "scrollWidth": 1280,
+        "clientWidth": 1280,
+        "elements": []
+      },
+      "navError": null
+    }
+  },
+  "tabOrder": {
+    "focusableCount": 136,
+    "interactiveCount": 135,
+    "trapped": false,
+    "sequence": [
+      {
+        "index": 0,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 1,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 2,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 3,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 4,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 5,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 6,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 7,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 8,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 9,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 10,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 11,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 12,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 13,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 14,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 15,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 16,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 17,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 18,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 19,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 20,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 21,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 22,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 23,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 24,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 25,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 26,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 27,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 28,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 29,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 30,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 31,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 32,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 33,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 34,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 35,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 36,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      },
+      {
+        "index": 37,
+        "tag": "button",
+        "selector": "button#tv-coach-session-toggle",
+        "name": "Start",
+        "focusVisible": true
+      },
+      {
+        "index": 38,
+        "tag": "body",
+        "selector": "(body)",
+        "name": ""
+      },
+      {
+        "index": 39,
+        "tag": "button",
+        "selector": "button#tv-coach-preset-button",
+        "name": "Aster",
+        "focusVisible": true
+      }
+    ],
+    "issues": []
+  },
+  "reducedMotion": {
+    "runningAnimations": 0,
+    "issues": []
+  },
+  "screenshots": [
+    "screenshots/w360.png",
+    "screenshots/w768.png",
+    "screenshots/w1280.png",
+    "screenshots/w1280-reduced.png"
+  ],
+  "startedAt": "2026-07-22T09:10:25.581Z",
+  "durationMs": 6938
+}

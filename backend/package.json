@@ -1,0 +1,14 @@
+{
+  "name": "sloane-voice-tutor-standalone-backend",
+  "version": "5.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node voice-standalone-server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "ws": "^8.19.0"
+  }
+}

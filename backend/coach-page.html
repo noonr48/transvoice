@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Voice Tutor</title>
+<meta name="description" content="Practice speaking English with an AI voice tutor. Real-time pronunciation feedback and natural conversation.">
+<meta name="theme-color" content="#f4eedd">
+<meta name="robots" content="noindex">
+<meta property="og:title" content="Voice Tutor">
+<meta property="og:description" content="Speak naturally. The coach listens and responds by voice.">
+<meta property="og:type" content="website">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════════
+   TOKENS
+   ═══════════════════════════════════════════════════════════ */
+:root{
+  /* Warm paper shell */
+  --bg-void:#f0e9d6;
+  --bg-primary:#e7dfc7;
+  --bg-secondary:#ddd3b8;
+  --bg-tertiary:#d2c8aa;
+  --text-primary:#2a2419;
+  --text-secondary:#564c3c;
+  --text-muted:#73685a;
+  --text-faint:#968b76;
+  --accent-primary:#b87a28;
+  --accent-primary-soft:#966420;
+  --accent-primary-glow:rgba(184,122,40,0.12);
+  --accent-primary-ring:rgba(184,122,40,0.28);
+  --status-ok:#4e8a56;
+  --border-subtle:rgba(70,50,15,0.08);
+  --border-default:rgba(70,50,15,0.14);
+  --radius-sm:6px;
+  --radius-md:10px;
+  --radius-lg:16px;
+  --radius-pill:999px;
+  --font-sans:"Inter",system-ui,-apple-system,sans-serif;
+  --type-coach:26px;
+  --ease-out:cubic-bezier(0.22,0.61,0.36,1);
+  /* Warm content */
+  --warm-bg:rgba(251,246,236,0.88);
+  --warm-ink:#1f1b16;
+  --warm-muted:#564a3e;
+  --warm-accent:#ba4b2f;
+  --warm-gold:#d5a840;
+  --warm-line:rgba(52,40,25,0.12);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RESET & BASE
+   ═══════════════════════════════════════════════════════════ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%;overflow-x:hidden}
+body{
+  background:var(--bg-void);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.55 0 0 0 0 0.47 0 0 0 0 0.30 0 0 0 0.035 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  color:var(--text-primary);
+  font-family:var(--font-sans);
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
+:focus-visible{outline:3px solid var(--accent-primary);outline-offset:3px}
+
+/* ═══════════════════════════════════════════════════════════
+   SKIP LINK
+   ═══════════════════════════════════════════════════════════ */
+.skip-link{
+  position:absolute;left:-999px;top:auto;width:1px;height:1px;overflow:hidden;
+  z-index:999;padding:10px 18px;background:var(--accent-primary);color:var(--bg-void);
+  font-weight:700;border-radius:var(--radius-md);font-size:.95rem;text-decoration:none;
+}
+.skip-link:focus{position:fixed;top:12px;left:12px;width:auto;height:auto;outline:3px solid var(--accent-primary);outline-offset:2px}
+
+/* ═══════════════════════════════════════════════════════════
+   AMBIENT GLOW
+   ═══════════════════════════════════════════════════════════ */
+.ambient-glow{
+  position:fixed;top:-140px;left:50%;transform:translateX(-50%);
+  width:560px;height:380px;
+  background:radial-gradient(ellipse,rgba(224,164,88,0.10) 0%,transparent 70%);
+  pointer-events:none;z-index:0;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PAGE SHELL & CONTENT COLUMN
+   ═══════════════════════════════════════════════════════════ */
+.page-shell{
+  position:relative;min-height:100vh;overflow:hidden;
+}
+.content-column{
+  position:relative;z-index:2;
+  width:min(480px,100%);margin:0 auto;
+  padding:28px 16px 130px;
+  display:flex;flex-direction:column;gap:14px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CONNECTION BADGE
+   ═══════════════════════════════════════════════════════════ */
+.conn-badge{
+  position:fixed;top:16px;right:16px;z-index:50;
+  display:flex;align-items:center;gap:8px;
+  padding:6px 14px;
+  background:var(--bg-primary);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-pill);
+  font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--text-muted);
+}
+.conn-dot{width:6px;height:6px;border-radius:50%;background:var(--text-faint);transition:background 200ms}
+.conn-badge.online .conn-dot{background:var(--status-ok)}
+.conn-badge.offline .conn-dot{background:var(--warm-accent)}
+
+/* ═══════════════════════════════════════════════════════════
+   ERROR BANNER
+   ═══════════════════════════════════════════════════════════ */
+#error-banner{
+  padding:12px 16px;border-radius:var(--radius-md);
+  background:rgba(190,75,47,0.10);border:1px solid rgba(190,75,47,0.20);
+  color:#8a3022;font-size:.92rem;line-height:1.4;
+}
+#error-banner strong{display:block;margin-bottom:2px;color:#a33820}
+
+/* ═══════════════════════════════════════════════════════════
+   STATUS GRID (warm paper cards)
+   ═══════════════════════════════════════════════════════════ */
+.status-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.status-panel{
+  background:var(--warm-bg);border:1px solid var(--warm-line);
+  border-radius:var(--radius-lg);padding:12px 14px;
+  backdrop-filter:blur(12px);
+}
+.status-label{
+  display:block;margin-bottom:5px;
+  font-size:.72rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--warm-muted);
+}
+.status-chip{
+  display:inline-flex;align-items:center;min-height:1.8rem;padding:.28rem .68rem;
+  border-radius:var(--radius-pill);
+  background:rgba(186,75,47,0.12);color:var(--warm-accent);
+  font-size:.92rem;font-weight:600;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CONTROL STRIP (warm paper)
+   ═══════════════════════════════════════════════════════════ */
+.control-strip{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.action-button{
+  border:0;border-radius:var(--radius-pill);min-height:52px;padding:0 20px;
+  font-size:.96rem;font-weight:800;letter-spacing:.01em;cursor:pointer;
+  font-family:var(--font-sans);
+  transition:transform 140ms ease,box-shadow 140ms ease,opacity 140ms ease;
+}
+.action-button:disabled{opacity:.38;cursor:default}
+.action-button:not(:disabled):active{transform:translateY(1px)}
+.action-start{
+  background:linear-gradient(135deg,var(--warm-accent) 0%,#d06537 100%);
+  color:#fff9f2;box-shadow:0 12px 24px rgba(186,75,47,0.25);
+}
+.action-end{
+  background:var(--warm-bg);color:var(--warm-ink);
+  border:1px solid var(--warm-line);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   METER PANEL (warm paper)
+   ═══════════════════════════════════════════════════════════ */
+.meter-panel{
+  padding:10px 14px;background:var(--warm-bg);
+  border:1px solid var(--warm-line);border-radius:var(--radius-lg);
+  backdrop-filter:blur(12px);
+}
+.meter-meta{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+.meter-label,.meter-hint{margin:0;font-size:.78rem;line-height:1.25}
+.meter-label{font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--warm-muted)}
+.meter-hint{color:var(--warm-muted);opacity:.85;text-align:right}
+.meter-track{
+  position:relative;width:100%;height:12px;border-radius:var(--radius-pill);overflow:hidden;
+  background:rgba(31,27,22,0.08);
+  transition:background 140ms ease,opacity 140ms ease,transform 140ms ease;
+}
+.meter-fill{
+  width:100%;height:100%;border-radius:inherit;
+  background:linear-gradient(90deg,var(--warm-gold) 0%,var(--warm-accent) 100%);
+  transform-origin:left center;transition:transform 80ms linear;transform:scaleX(.03);
+}
+.meter-track.is-listening{background:rgba(186,75,47,0.12)}
+.meter-track.is-listening .meter-fill{background:linear-gradient(90deg,#d5a840 0%,#cc6d2f 55%,#ba4b2f 100%)}
+.meter-track.is-passive{opacity:.4;transform:scaleY(.92)}
+
+/* ═══════════════════════════════════════════════════════════
+   PRESET PANEL (warm paper)
+   ═══════════════════════════════════════════════════════════ */
+.preset-panel{
+  padding:10px 14px 12px;background:var(--warm-bg);
+  border:1px solid var(--warm-line);border-radius:var(--radius-lg);
+  backdrop-filter:blur(12px);
+}
+.preset-select{
+  width:100%;margin-top:5px;padding:9px 32px 9px 12px;
+  border:1px solid var(--warm-line);border-radius:var(--radius-md);
+  background:#fffaf0;
+  color:var(--warm-ink);font-family:var(--font-sans);font-size:.9rem;
+  cursor:pointer;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23564a3e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 10px center;
+  transition:border-color 200ms;
+}
+/* When inside the flex preset row, let flex handle width instead of 100% */
+.preset-panel > div > .preset-select{width:auto}
+.preset-select:focus{border-color:var(--warm-gold);outline:none}
+.test-voice-btn{
+  flex-shrink:0;
+  background:rgba(212,165,116,.18);
+  border:1px solid rgba(212,165,116,.35);
+  color:#5a3e1a;
+  padding:6px 12px;border-radius:var(--radius-md);
+  cursor:pointer;
+  font:600 11px/1 var(--font-sans);
+  white-space:nowrap;transition:all .2s;
+}
+.test-voice-btn:hover{background:rgba(212,165,116,.28)}
+.test-voice-btn:disabled{opacity:.5;cursor:default}
+
+/* ═══════════════════════════════════════════════════════════
+   ORB STAGE
+   ═══════════════════════════════════════════════════════════ */
+.orb-stage{
+  position:relative;display:flex;flex-direction:column;align-items:center;
+  padding:24px 0 8px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TRAIL (receded past-turn text)
+   ═══════════════════════════════════════════════════════════ */
+.trail{
+  text-align:center;font-size:.8rem;color:var(--text-faint);
+  min-height:20px;line-height:1.5;
+  opacity:.5;transition:opacity 500ms var(--ease-out);
+  max-width:320px;
+}
+body[data-state="idle"] .trail{opacity:0}
+
+/* ═══════════════════════════════════════════════════════════
+   PHONETIC TRANSCRIPT — coach's reply in pronunciation spelling
+   ═══════════════════════════════════════════════════════════ */
+.phonetic-transcript{
+  margin-top:16px;padding:14px 18px;
+  background:var(--warm-bg);border:1px solid var(--warm-line);
+  border-radius:var(--radius-lg);
+  font-size:.95rem;line-height:1.7;color:var(--warm-ink);
+  max-width:400px;text-align:center;
+  font-style:italic;
+  opacity:0;transform:translateY(8px);
+  transition:opacity 400ms var(--ease-out),transform 400ms var(--ease-out);
+  pointer-events:none;
+}
+.phonetic-transcript.visible{opacity:1;transform:translateY(0)}
+.phonetic-line{display:block}
+.phonetic-stress{font-weight:700;font-style:normal;color:var(--warm-accent)}
+.phonetic-label{
+  display:block;font-size:.62rem;font-weight:700;font-style:normal;
+  letter-spacing:.12em;text-transform:uppercase;
+  color:var(--warm-muted);margin-bottom:6px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ORB
+   ═══════════════════════════════════════════════════════════ */
+.orb-wrapper{position:relative;width:96px;height:96px}
+.orb{width:100%;height:100%;position:relative}
+
+.orb-core{
+  position:absolute;inset:8px;border-radius:50%;
+  background:radial-gradient(circle at 40% 35%,var(--bg-tertiary) 0%,var(--bg-primary) 100%);
+  border:1px solid var(--border-default);
+  box-shadow:0 2px 10px rgba(0,0,0,0.35),inset 0 1px 2px rgba(255,255,255,0.04);
+  transition:all 400ms var(--ease-out);
+}
+
+.orb-ring{
+  position:absolute;inset:0;border-radius:50%;
+  border:1.5px solid transparent;
+  opacity:0;pointer-events:none;
+}
+
+.orb-glow{
+  position:absolute;inset:-28px;border-radius:50%;
+  background:radial-gradient(circle,var(--accent-primary-glow) 0%,transparent 70%);
+  opacity:0;transition:opacity 400ms var(--ease-out);pointer-events:none;
+}
+
+/* Orb: idle — subtle breathing */
+body[data-state="idle"] .orb-core{animation:orb-idle-breathe 7s ease-in-out infinite}
+
+/* Orb: listening — calm presence */
+body[data-state="listening"] .orb-core{
+  background:radial-gradient(circle at 40% 35%,var(--bg-tertiary) 0%,var(--bg-secondary) 100%);
+  border-color:var(--border-default);
+}
+body[data-state="listening"] .orb-glow{opacity:.25}
+
+/* Orb: thinking — gentle pulse */
+body[data-state="thinking"] .orb-core{animation:orb-think-pulse 2.8s ease-in-out infinite}
+body[data-state="thinking"] .orb-glow{opacity:.35;animation:orb-glow-pulse 2.8s ease-in-out infinite}
+
+/* Orb: speaking — amber glow + expanding rings */
+body[data-state="speaking"] .orb-core{
+  background:radial-gradient(circle at 40% 35%,#d5a840 0%,#b87a28 100%);
+  border-color:var(--accent-primary-ring);
+  box-shadow:0 2px 10px rgba(0,0,0,0.12),0 0 32px rgba(184,122,40,0.22),inset 0 1px 2px rgba(255,255,255,0.15);
+}
+body[data-state="speaking"] .orb-glow{
+  opacity:1;animation:orb-glow-pulse 2.4s ease-in-out infinite;
+}
+body[data-state="speaking"] .orb-ring{
+  border-color:var(--accent-primary-ring);
+  animation:orb-ring-expand 2.4s var(--ease-out) infinite;
+}
+body[data-state="speaking"] .orb-ring.ring-2{animation-delay:.8s}
+
+@keyframes orb-idle-breathe{
+  0%,100%{transform:scale(1);opacity:.92}
+  50%{transform:scale(1.018);opacity:1}
+}
+@keyframes orb-think-pulse{
+  0%,100%{transform:scale(1)}
+  50%{transform:scale(1.04)}
+}
+@keyframes orb-glow-pulse{
+  0%,100%{opacity:.3;transform:scale(1)}
+  50%{opacity:.7;transform:scale(1.08)}
+}
+@keyframes orb-ring-expand{
+  0%{transform:scale(.85);opacity:.6}
+  100%{transform:scale(2.2);opacity:0}
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SLIDE-IN CARDS
+   ═══════════════════════════════════════════════════════════ */
+.cards-rail{
+  position:fixed;right:20px;top:50%;transform:translateY(-50%);
+  width:250px;z-index:10;
+  display:flex;flex-direction:column;gap:10px;
+  pointer-events:none;
+}
+.slide-card{
+  background:var(--warm-bg);border:1px solid var(--warm-line);
+  border-radius:var(--radius-lg);padding:14px;
+  backdrop-filter:blur(12px);
+  transform:translateX(110%);opacity:0;
+  transition:transform 260ms var(--ease-out),opacity 260ms var(--ease-out);
+  pointer-events:auto;
+}
+.slide-card.visible{transform:translateX(0);opacity:1}
+.card-label{
+  font-size:.68rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--warm-muted);margin-bottom:5px;
+}
+.card-body{font-size:.88rem;line-height:1.45;color:var(--warm-ink);overflow-wrap:anywhere}
+.pitch-visual{
+  margin-top:8px;height:6px;border-radius:var(--radius-pill);
+  background:var(--warm-line);overflow:hidden;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   LIVE STATUS (warm paper)
+   ═══════════════════════════════════════════════════════════ */
+.live-status{
+  padding:16px;background:var(--warm-bg);
+  border:1px solid var(--warm-line);border-radius:var(--radius-lg);
+  backdrop-filter:blur(12px);
+}
+.live-header{display:flex;justify-content:space-between;gap:14px;align-items:center}
+.live-label{
+  margin:0;font-size:.76rem;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--warm-muted);
+}
+#status-text{font-size:1rem;line-height:1.2;overflow-wrap:anywhere}
+
+/* ═══════════════════════════════════════════════════════════
+   PULSE DOT
+   ═══════════════════════════════════════════════════════════ */
+.pulse-dot{
+  width:20px;height:20px;border-radius:50%;flex:0 0 auto;
+  background:rgba(101,88,74,0.25);
+  box-shadow:0 0 0 0 rgba(186,75,47,0.4);
+  transition:background 160ms ease;
+}
+.pulse-dot.is-live{background:var(--warm-accent);animation:pulse 1.8s infinite}
+.pulse-dot.is-coach{background:var(--warm-gold);animation:pulse-gold 1.8s infinite}
+.pulse-dot.is-thinking{background:var(--warm-gold);animation:pulse-gold 3s infinite;opacity:.6}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(186,75,47,0.4)}
+  70%{box-shadow:0 0 0 12px rgba(186,75,47,0)}
+  100%{box-shadow:0 0 0 0 rgba(186,75,47,0)}
+}
+@keyframes pulse-gold{
+  0%{box-shadow:0 0 0 0 rgba(213,168,64,0.4)}
+  70%{box-shadow:0 0 0 12px rgba(213,168,64,0)}
+  100%{box-shadow:0 0 0 0 rgba(213,168,64,0)}
+}
+
+.turn-wrap{margin-top:14px}
+.turn-indicator{
+  color:var(--warm-accent);font-size:1.25rem;font-weight:800;line-height:1.1;
+  overflow-wrap:anywhere;margin:0;
+}
+.turn-subtext{
+  margin-top:5px;color:var(--warm-muted);font-size:.9rem;line-height:1.45;
+  overflow-wrap:anywhere;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   VOICE SAMPLE
+   ═══════════════════════════════════════════════════════════ */
+.voice-sample-section{text-align:center;padding:4px 0}
+.link-btn{
+  background:none;border:0;color:var(--warm-muted);font-size:.76rem;
+  text-decoration:underline;cursor:pointer;font-family:var(--font-sans);
+  padding:8px 4px;min-height:40px;display:inline-flex;align-items:center;
+}
+.link-btn:focus-visible{outline:2px solid var(--warm-accent);outline-offset:2px}
+.voice-guide-text{font-size:.7rem;color:var(--warm-muted);margin-top:2px;line-height:1.4}
+.voice-quality-text{font-size:.75rem;color:var(--warm-muted);margin-top:4px;min-height:0;line-height:1.4}
+
+/* ═══════════════════════════════════════════════════════════
+   DOCK (dark shell)
+   ═══════════════════════════════════════════════════════════ */
+.dock{
+  position:fixed;bottom:0;left:0;right:0;z-index:100;
+  padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));
+  background:linear-gradient(to top,var(--bg-void) 55%,transparent);
+  display:flex;align-items:center;gap:10px;
+}
+.dock-pill{
+  display:flex;align-items:center;gap:7px;
+  padding:7px 14px;
+  background:var(--bg-primary);border:1px solid var(--border-subtle);
+  border-radius:var(--radius-pill);
+  font-size:.78rem;font-weight:600;color:var(--text-secondary);
+  white-space:nowrap;flex-shrink:0;
+}
+.pill-dot{
+  width:7px;height:7px;border-radius:50%;background:var(--text-faint);
+  transition:background 200ms;
+}
+body[data-state="speaking"] .pill-dot{background:var(--accent-primary)}
+body[data-state="listening"] .pill-dot{background:var(--status-ok)}
+body[data-state="thinking"] .pill-dot{background:var(--warm-gold)}
+
+/* ═══════════════════════════════════════════════════════════
+   DEBUG PANEL
+   ═══════════════════════════════════════════════════════════ */
+#debug-panel{
+  position:fixed;bottom:0;left:0;right:0;max-height:240px;overflow-y:auto;
+  background:rgba(15,12,8,.95);color:#c8c0b0;
+  font:11px/1.4 'SF Mono',Consolas,monospace;
+  z-index:99998;border-top:2px solid var(--warm-accent);
+  display:none;backdrop-filter:blur(8px);
+}
+#debug-header{
+  position:sticky;top:0;background:rgba(15,12,8,.98);
+  padding:6px 12px;display:flex;justify-content:space-between;align-items:center;
+  border-bottom:1px solid #333;
+}
+#debug-title{font-weight:700;color:var(--warm-gold);letter-spacing:.05em}
+#debug-list{padding:4px 12px 8px}
+
+/* ═══════════════════════════════════════════════════════════
+   UTILITIES
+   ═══════════════════════════════════════════════════════════ */
+.hidden{display:none !important}
+
+/* ═══════════════════════════════════════════════════════════
+   BODY STATE: loading
+   ═══════════════════════════════════════════════════════════ */
+body[data-ready="false"] #start-btn{opacity:.5;cursor:wait;pointer-events:none}
+
+/* ═══════════════════════════════════════════════════════════
+   REDUCED MOTION
+   ═══════════════════════════════════════════════════════════ */
+@media(prefers-reduced-motion:reduce){
+  .pulse-dot.is-live,.pulse-dot.is-coach,.pulse-dot.is-thinking{animation:none}
+  .orb-ring{display:none}
+  body[data-state="idle"] .orb-core,
+  body[data-state="thinking"] .orb-core{animation:none}
+  body[data-state="thinking"] .orb-glow,
+  body[data-state="speaking"] .orb-glow{animation:none}
+  .action-button,.meter-track,.meter-fill,.conn-dot,
+  .orb-core,.orb-glow,.slide-card,.phonetic-line{
+    transition:none;
+  }
+  .pulse-dot.is-live{box-shadow:0 0 0 3px rgba(186,75,47,0.2)}
+  .pulse-dot.is-coach,.pulse-dot.is-thinking{box-shadow:0 0 0 3px rgba(213,168,64,0.2)}
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MOBILE RESPONSIVE
+   ═══════════════════════════════════════════════════════════ */
+@media(max-width:720px){
+  .conn-badge{top:10px;right:10px;font-size:.68rem;padding:5px 10px}
+  .content-column{padding:20px 14px 130px;gap:12px}
+  .status-grid{grid-template-columns:1fr;gap:8px}
+  .control-strip{grid-template-columns:1fr;gap:8px}
+  .action-button{min-height:48px;font-size:.92rem}
+  .cards-rail{
+    position:fixed;right:10px;bottom:90px;top:auto;transform:none;
+    width:calc(100vw - 20px);max-width:280px;
+  }
+  .orb-wrapper{width:72px;height:72px}
+  .orb-core{inset:6px}
+  .orb-glow{inset:-20px}
+  .turn-indicator{font-size:clamp(1.1rem,5vw,1.3rem)}
+  .ambient-glow{width:360px;height:260px;top:-100px}
+  .dock{padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px))}
+  .dock-pill{font-size:.72rem;padding:5px 10px}
+  .preset-panel > div{flex-direction:column;gap:6px}
+  .preset-panel > div > .preset-select{width:100%}
+  .test-voice-btn{width:100%;text-align:center;padding:8px 12px}
+}
+@media(max-width:480px){
+  .phonetic-line{font-size:.85rem}
+}
+
+/* SF2: landscape phone — compact layout */
+@media(max-width:720px) and (orientation:landscape) and (max-height:420px){
+  .status-grid{display:none}
+  .orb-stage{padding:6px 0}
+  .live-status{padding:10px}
+  .content-column{gap:8px;padding-top:8px}
+  .turn-indicator{font-size:1.05rem}
+}
+</style>
+</head>
+<body data-ready="false" data-state="idle">
+<a href="#main" class="skip-link">Skip to controls</a>
+
+<div class="page-shell">
+  <div class="ambient-glow" aria-hidden="true"></div>
+
+  <div class="conn-badge" id="conn" aria-live="polite" aria-label="Connection status: connecting">
+    <span class="conn-dot"></span><span id="conn-label">Connecting...</span>
+  </div>
+
+  <div id="error-banner" class="hidden" role="alert">
+    <strong id="error-title">Error</strong>
+    <span id="error-msg"></span>
+  </div>
+
+  <main id="main" class="content-column" tabindex="-1">
+    <section class="status-grid" aria-label="Session status">
+      <div class="status-panel">
+        <span class="status-label">Session</span>
+        <strong id="session-chip" class="status-chip" aria-live="polite">Idle</strong>
+      </div>
+      <div class="status-panel">
+        <span class="status-label">Mode</span>
+        <strong id="mode-chip" class="status-chip" aria-live="polite">Waiting</strong>
+      </div>
+      <div class="status-panel">
+        <span class="status-label">Turns</span>
+        <strong id="turn-chip" class="status-chip" aria-live="polite">0</strong>
+      </div>
+    </section>
+
+    <section class="control-strip">
+      <button id="start-btn" class="action-button action-start" type="button">Start Session</button>
+      <button id="end-btn" class="action-button action-end" type="button" disabled>End Session</button>
+    </section>
+
+    <section class="meter-panel" aria-label="Microphone level">
+      <div class="meter-meta">
+        <span class="meter-label">Mic level</span>
+        <span id="meter-hint" class="meter-hint">Speak to test the mic.</span>
+      </div>
+      <div id="meter-track" class="meter-track"
+           role="meter" aria-label="Microphone input level"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="meter-fill" class="meter-fill"></div>
+      </div>
+    </section>
+
+    <section class="preset-panel" aria-label="Voice preset">
+      <span class="status-label">Voice Preset</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="preset-select" class="preset-select" aria-label="Select voice preset" style="flex:1 1 0;min-width:0;width:auto">
+          <option value="" disabled selected>Loading presets...</option>
+        </select>
+        <button id="test-voice-btn" type="button" class="test-voice-btn" title="Generate a sample to test this voice">Test Voice</button>
+      </div>
+    </section>
+
+    <div class="orb-stage">
+      <div class="trail" id="trail" aria-hidden="true"></div>
+      <div class="orb-wrapper">
+        <div class="orb" aria-hidden="true">
+          <div class="orb-core"></div>
+          <div class="orb-ring ring-1"></div>
+          <div class="orb-ring ring-2"></div>
+          <div class="orb-glow"></div>
+        </div>
+      </div>
+      <div class="phonetic-transcript" id="phonetic-transcript" aria-live="polite" aria-label="Coach speaking — phonetic spelling"></div>
+    </div>
+
+    <section class="live-status" aria-label="Live conversation status">
+      <div class="live-header">
+        <div>
+          <p class="live-label">Live status</p>
+          <strong id="status-text" aria-live="polite">Ready to start.</strong>
+        </div>
+        <div class="pulse-dot" id="pulse-dot" aria-hidden="true"></div>
+      </div>
+      <div class="turn-wrap">
+        <p id="turn-indicator" class="turn-indicator" aria-live="assertive">Press Start to begin.</p>
+        <p id="turn-subtext" class="turn-subtext">When it is your turn, speak naturally.</p>
+      </div>
+    </section>
+
+    <div class="voice-sample-section">
+      <button id="voice-sample-link" class="link-btn" type="button">Set your preferred voice</button>
+      <div id="voice-guide" class="voice-guide-text">
+        Record 5-15 seconds of clear speech. Minimum 3s, maximum 30s. WAV, MP3, or M4A.
+      </div>
+      <div id="voice-quality-note" class="voice-quality-text"></div>
+    </div>
+  </main>
+</div>
+
+<!-- Slide-in cards (fixed right side) -->
+<div class="cards-rail" aria-hidden="true">
+  <div class="slide-card phrase-card" id="phrase-card">
+    <div class="card-label">Coach says</div>
+    <div class="card-body" id="phrase-body"></div>
+  </div>
+  <div class="slide-card insight-card" id="insight-card">
+    <div class="card-label">Insight</div>
+    <div class="card-body" id="insight-body"></div>
+    <div class="pitch-visual" id="pitch-range"></div>
+  </div>
+</div>
+
+<!-- Bottom dock — voice-only, no text composer -->
+<div class="dock" role="region" aria-label="Session status">
+  <div class="dock-pill" id="dock-pill">
+    <span class="pill-dot"></span>
+    <span class="pill-label" id="pill-label">Your turn</span>
+  </div>
+</div>
+
+<!-- Debug panel (Ctrl+Shift+D to toggle) -->
+<div id="debug-panel">
+  <div id="debug-header">
+    <span id="debug-title">PIPELINE DEBUG</span>
+    <span>
+      <button id="dbg-fetch-srv" type="button" style="background:none;border:1px solid #555;color:#aaa;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin-right:4px">Server Log</button>
+      <button id="dbg-clear" type="button" style="background:none;border:1px solid #555;color:#aaa;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px;margin-right:4px">Clear</button>
+      <button id="dbg-close" type="button" style="background:none;border:1px solid #555;color:#aaa;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:10px">Hide</button>
+    </span>
+  </div>
+  <div id="debug-list"></div>
+</div>
+
+<!-- State observer + preset loader (runs before coach-app.js) -->
+<script>
+/* Sync body[data-state] from pulse-dot class changes + update dock pill */
+(function(){
+  var dot=document.getElementById('pulse-dot'),pill=document.getElementById('pill-label');
+  if(!dot)return;
+  var obs=new MutationObserver(function(){
+    var s='idle';
+    if(dot.classList.contains('is-live'))s='listening';
+    else if(dot.classList.contains('is-thinking'))s='thinking';
+    else if(dot.classList.contains('is-coach'))s='speaking';
+    document.body.setAttribute('data-state',s);
+    if(pill){
+      pill.textContent=s==='speaking'?'Coach speaking':s==='thinking'?'Thinking...':'Your turn';
+    }
+  });
+  obs.observe(dot,{attributes:true,attributeFilter:['class']});
+  document.body.setAttribute('data-state','idle');
+})();
+
+/* Populate preset selector from /voice/presets */
+(function(){
+  var sel=document.getElementById('preset-select');
+  if(!sel)return;
+  fetch('/voice/presets').then(function(r){return r.json();}).then(function(d){
+    var presets=Array.isArray(d)?d:(d.presets||d.items||[]);
+    sel.innerHTML='';
+    if(!presets.length){sel.innerHTML='<option value="" disabled>No presets available</option>';return;}
+    var savedId=null;try{savedId=localStorage.getItem('coachPresetId');}catch(e){}
+    var found=false;
+    presets.forEach(function(p){
+      var opt=document.createElement('option');
+      opt.value=p.id;opt.textContent=p.name||p.id;
+      if(p.id===savedId){opt.selected=true;found=true;}
+      sel.appendChild(opt);
+    });
+    if(!found&&sel.options.length)sel.options[0].selected=true;
+  }).catch(function(){
+    sel.innerHTML='<option value="" disabled>Failed to load presets</option>';
+  });
+})();
+</script>
+<script src="/static/phonetic-dict.js"></script>
+<script src="/static/coach-app.js"></script>
+</body>
+</html>

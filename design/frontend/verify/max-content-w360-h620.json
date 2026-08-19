@@ -1,0 +1,83 @@
+{
+  "target": "http://127.0.0.1:3021/app",
+  "generatedAt": "2026-07-25T12:19:12.759Z",
+  "metrics": {
+    "viewport": {
+      "width": 360,
+      "height": 620
+    },
+    "document": {
+      "clientWidth": 360,
+      "scrollWidth": 360,
+      "clientHeight": 620,
+      "scrollHeight": 620,
+      "scrollY": 0
+    },
+    "density": "dense",
+    "state": "ready",
+    "representation": "pronunciation",
+    "canvas": {
+      "top": 76,
+      "right": 344,
+      "bottom": 366.34375,
+      "left": 16,
+      "width": 328,
+      "height": 290.34375,
+      "clientHeight": 290,
+      "scrollHeight": 290
+    },
+    "line": {
+      "top": 0,
+      "right": 0,
+      "bottom": 0,
+      "left": 0,
+      "width": 0,
+      "height": 0,
+      "clientHeight": 0,
+      "scrollHeight": 0,
+      "length": 0
+    },
+    "pronunciation": {
+      "top": 158.796875,
+      "right": 326,
+      "bottom": 283.546875,
+      "left": 34,
+      "width": 292,
+      "height": 124.75,
+      "clientHeight": 125,
+      "scrollHeight": 125,
+      "length": 160
+    },
+    "action": {
+      "top": 387.328125,
+      "right": 340,
+      "bottom": 439.328125,
+      "left": 20,
+      "width": 320,
+      "height": 52,
+      "centerY": 413.328125,
+      "targetCenterY": 413.3333333333333,
+      "label": "Start"
+    },
+    "visiblePersistentControls": [
+      "tv-coach-preset-button",
+      "tv-coach-session-toggle"
+    ]
+  },
+  "checks": {
+    "viewportExact": true,
+    "documentNoScroll": true,
+    "exactControlSet": true,
+    "exactContentLengths": true,
+    "inactivePhraseHidden": true,
+    "canvasContainsPronunciation": true,
+    "contentDoesNotClip": true,
+    "actionClearance": true,
+    "thumbZoneCenter": true,
+    "touchTarget": true,
+    "terseAction": true,
+    "denseState": true
+  },
+  "runtimeFailures": [],
+  "pass": true
+}

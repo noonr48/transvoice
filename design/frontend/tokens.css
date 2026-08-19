@@ -1,0 +1,77 @@
+/* TransVoice tutor mode — calm dark modern-minimal tokens.
+   The ONLY file where color/size literals live. Adapted from theme-minimal-cloud
+   (modern-minimal) to a refined graphite ramp (continuity + dim-practice fit). */
+
+:root {
+  /* ── surface ramp (the room) ── */
+  --bg-void:     #131413;   /* page, near-black */
+  --bg-primary:  #1c1d1c;   /* card / panel */
+  --bg-secondary:#242624;   /* raised input / inset */
+  --bg-tertiary: #2c2e2c;   /* hover */
+
+  /* ── text ramp (warm off-white) ── */
+  --text-primary:   #ececea;
+  --text-secondary: #a8aaa6;
+  --text-muted:     #6f726e;
+  --text-faint:     #4a4c49;
+
+  /* ── ONE accent (active / primary / focus only) ── */
+  --accent-primary:     #e0a458;   /* warm amber = the studio lamp */
+  --accent-primary-soft:#b98443;
+  --accent-primary-glow: rgba(224,164,88,0.16);
+  --accent-primary-ring: rgba(224,164,88,0.32);
+
+  /* ── status family (status ONLY) ── */
+  --status-ok:    #7fb283;
+  --status-ready: #93c898;
+  --status-warn:  #d8a85c;
+  --status-error: #d97a6c;
+  --status-off:   #6f726e;
+
+  /* ── borders / shadow / radius ── */
+  --border-subtle: rgba(255,255,255,0.06);
+  --border-default:rgba(255,255,255,0.10);
+  --border-focus:  var(--accent-primary-ring);
+  --overlay-strong: rgba(27,30,27,0.98);
+  --shadow-overlay: 0 10px 40px rgba(0,0,0,0.45);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  /* ── type ── */
+  --font-sans: "Manrope", "Avenir Next", system-ui, sans-serif;
+  --type-2xs: 11px;
+  --type-orb-state: 11px;
+  --type-coach-activity: 12px;
+  --type-sm:  13px;
+  --type-base:15px;
+  --type-lg:  18px;
+  --type-xl:  22px;
+  --type-coach: 26px;   /* the live spoken line */
+  --leading-base: 1.55;
+  --tracking-label: 0.08em;
+
+  /* ── 8pt spacing ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* ── voice-only Coach geometry ── */
+  --coach-action-center-y: 66.667dvh; /* one-third of the viewport above bottom */
+  --coach-action-height: 58px;
+  --coach-action-width: 320px;
+  --coach-action-clearance: calc(33.333dvh + 53px);
+  --coach-instruction-dense-gap: 8px;
+  --coach-activity-top: calc(var(--coach-action-center-y) + 43px);
+
+  /* ── motion ── */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --ease-out: cubic-bezier(0.22,0.61,0.36,1);
+}

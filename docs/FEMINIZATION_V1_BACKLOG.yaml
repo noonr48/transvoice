@@ -1,0 +1,317 @@
+schema: transvoice.feminization_v1_backlog.v1
+plan_version: "1.0"
+date: "2026-08-17"
+product: "TransVoice Feminization Foundations v1"
+default_runtime_mode: shadow
+
+laws:
+  - no_gender_or_passing_score
+  - curriculum_before_metric_ranking
+  - one_focus_at_a_time
+  - no_anatomy_claim_from_audio
+  - pain_stops_training
+  - unknown_is_not_zero
+  - exact_next_attempt_causality
+  - shadow_never_mutates_learning
+  - no_active_unreviewed_cue
+  - no_universal_step_constant
+  - retention_required
+  - target_upload_optional
+
+tasks:
+  - id: TV-FEM-P0-001
+    title: Record current integration state
+    phase: P0
+    priority: critical
+    dependencies: []
+    actions:
+      - fetch_current_branch
+      - record_head_sha
+      - compare_with_main
+      - record_uncommitted_state
+      - inventory_workflows_and_backup_files
+    acceptance:
+      - exact_sha_documented
+      - current_diff_documented
+      - no_unknown_worktree_state
+
+  - id: TV-FEM-P0-002
+    title: Re-run canonical test suites
+    phase: P0
+    priority: critical
+    dependencies: [TV-FEM-P0-001]
+    actions:
+      - run_full_node_coaching_suite
+      - run_full_python_voice_trainer_suite
+      - preserve_exact_output
+    acceptance:
+      - test_commands_recorded
+      - failures_triaged
+      - no_unsubstantiated_pass_claim
+
+  - id: TV-FEM-P0-003
+    title: Audit runtime connectivity
+    phase: P0
+    priority: critical
+    dependencies: [TV-FEM-P0-001]
+    files:
+      - transvoice-app/docs/FEMINIZATION_V1_RUNTIME_AUDIT.md
+    acceptance:
+      - policy_runtime_use_known
+      - curriculum_runtime_use_known
+      - mastery_runtime_use_known
+      - feedback_runtime_use_known
+      - buffered_and_sse_paths_mapped
+
+  - id: TV-FEM-P0-004
+    title: Freeze and split oversized draft
+    phase: P0
+    priority: critical
+    dependencies: [TV-FEM-P0-002, TV-FEM-P0-003]
+    actions:
+      - remove_source_mutating_workflows
+      - remove_verified_backup_debris
+      - update_from_main
+      - create_scoped_branch_plan
+    acceptance:
+      - integration_sha_frozen
+      - no_one_shot_patch_workflow
+      - scoped_pr_plan_documented
+
+  - id: TV-FEM-P1-001
+    title: Implement authoritative feminization controller
+    phase: P1
+    priority: critical
+    dependencies: [TV-FEM-P0-004]
+    files:
+      - transvoice-app/backend/coaching/feminization-v1-controller.js
+      - transvoice-app/backend/coaching/feminization-v1-controller.test.js
+    acceptance:
+      - safety_precedes_all
+      - capture_precedes_correction
+      - phase_precedes_ranking
+      - pending_trial_resolved_first
+      - invalid_mode_fails_to_shadow
+      - shadow_is_non_mutating
+
+  - id: TV-FEM-P1-002
+    title: Implement hard metric eligibility policy
+    phase: P1
+    priority: critical
+    dependencies: [TV-FEM-P1-001]
+    files:
+      - transvoice-app/backend/coaching/metric-eligibility.js
+      - transvoice-app/backend/coaching/metric-eligibility.test.js
+    acceptance:
+      - pitch_phase_rejects_breathiness
+      - pitch_phase_rejects_prosody
+      - pitch_phase_rejects_legacy_weight
+      - resonance_phase_rejects_arbitrary_formants
+      - research_metrics_remain_shadow_only
+
+  - id: TV-FEM-P1-003
+    title: Integrate learner-level beginner mastery
+    phase: P1
+    priority: critical
+    dependencies: [TV-FEM-P0-003]
+    acceptance:
+      - target_change_preserves_mastery
+      - mastery_excluded_from_llm_context
+      - reset_clears_mastery
+      - shadow_cannot_update
+      - retention_and_review_due_supported
+
+  - id: TV-FEM-P2-001
+    title: Define pitch calibration evidence
+    phase: P2
+    priority: critical
+    dependencies: [TV-FEM-P1-001, TV-FEM-P1-002]
+    acceptance:
+      - baseline_distribution_versioned
+      - comfortable_movement_recorded
+      - effort_bound
+      - tracker_uncertainty_recorded
+      - no_universal_target
+
+  - id: TV-FEM-P2-002
+    title: Implement pitch reachable-target policy interface
+    phase: P2
+    priority: critical
+    dependencies: [TV-FEM-P2-001]
+    acceptance:
+      - named_policy_required
+      - policy_version_required
+      - demonstrated_comfort_required
+      - detector_uncertainty_considered
+      - production_has_no_default_step
+
+  - id: TV-FEM-P2-003
+    title: Complete pitch served-cue trial lifecycle
+    phase: P2
+    priority: critical
+    dependencies: [TV-FEM-P2-002]
+    acceptance:
+      - approved_cue_required
+      - cue_served_event_required
+      - exact_next_attempt_required
+      - protected_effort_required
+      - idempotent_update
+      - shadow_never_learns
+
+  - id: TV-FEM-P2-004
+    title: Add feedback fading and pitch retention
+    phase: P2
+    priority: critical
+    dependencies: [TV-FEM-P2-003, TV-FEM-P1-003]
+    acceptance:
+      - hidden_guide_attempt
+      - later_session_check
+      - mastery_requires_retention
+      - immediate_success_not_mastery
+
+  - id: TV-FEM-P2-005
+    title: Integrate pitch beginner card
+    phase: P2
+    priority: high
+    dependencies: [TV-FEM-P2-004]
+    acceptance:
+      - one_focus
+      - listen_try_record_result_next
+      - no_internal_vocabulary
+      - neutral_capture_repair
+      - technical_details_opt_in
+
+  - id: TV-FEM-P3-001
+    title: Create first versioned language pack
+    phase: P3
+    priority: critical
+    dependencies: [TV-FEM-P0-003]
+    files:
+      - transvoice-app/backend/coaching/language-packs/en-AU-v1.js
+    acceptance:
+      - language_pack_id
+      - ipa_and_lexical_set
+      - exact_prompts
+      - demo_asset_contract
+      - accepted_variants
+      - review_status
+
+  - id: TV-FEM-P3-002
+    title: Implement authoritative controlled-vowel evidence
+    phase: P3
+    priority: critical
+    dependencies: [TV-FEM-P3-001]
+    files:
+      - transvoice-app/backend/coaching/controlled-vowel-evidence.js
+      - transvoice-app/backend/coaching/controlled-vowel-evidence.test.js
+    acceptance:
+      - stable_segment
+      - f0_and_f1_f2_f3
+      - per_formant_confidence
+      - track_continuity
+      - estimator_agreement
+      - high_f0_risk
+      - explicit_invalidity_reasons
+
+  - id: TV-FEM-P3-003
+    title: Build formant golden corpus
+    phase: P3
+    priority: critical
+    dependencies: [TV-FEM-P3-002]
+    acceptance:
+      - expert_corrected_tracks
+      - repeated_tokens
+      - high_f0_cases
+      - device_cases
+      - held_out_speaker_split
+      - frozen_gate_definition
+
+  - id: TV-FEM-P3-004
+    title: Complete controlled /i/ resonance trial
+    phase: P3
+    priority: critical
+    dependencies: [TV-FEM-P3-003, TV-FEM-P2-003]
+    acceptance:
+      - arbitrary_speech_rejected
+      - pitch_protected
+      - effort_protected
+      - exact_next_attempt
+      - movement_exceeds_uncertainty
+      - no_feedback_retention
+      - word_transfer
+
+  - id: TV-FEM-P4-001
+    title: Integrate pitch and resonance
+    phase: P4
+    priority: high
+    dependencies: [TV-FEM-P2-005, TV-FEM-P3-004]
+    acceptance:
+      - one_primary_focus
+      - established_skill_protected
+      - effort_can_simplify
+      - short_phrase_transfer
+      - cross_session_retrieval
+
+  - id: TV-FEM-P5-001
+    title: Split learner-general motor response from goal overlay
+    phase: P5
+    priority: high
+    dependencies: [TV-FEM-P2-003]
+    acceptance:
+      - reference_change_preserves_motor_response
+      - goal_overlay_separate
+      - migration_provenance
+      - no_invented_confidence
+      - llm_context_exclusion
+
+  - id: TV-FEM-P6-001
+    title: Build replay evaluator
+    phase: P6
+    priority: high
+    dependencies: [TV-FEM-P1-001]
+    acceptance:
+      - legacy_vs_v1_focus
+      - phase_policy_violations
+      - rejection_reasons
+      - confound_rate
+      - retention_rate
+      - effort_change
+
+  - id: TV-FEM-P6-002
+    title: Complete clinical cue review matrix
+    phase: P6
+    priority: critical
+    dependencies: [TV-FEM-P2-003, TV-FEM-P3-004]
+    files:
+      - transvoice-app/docs/CUE_REVIEW_MATRIX.md
+    acceptance:
+      - every_active_cue_named_reviewer
+      - contraindications
+      - repetition_and_rest_rules
+      - approved_status
+      - versioned_wording
+
+  - id: TV-FEM-P6-003
+    title: Run beginner usability pilot
+    phase: P6
+    priority: critical
+    dependencies: [TV-FEM-P4-001, TV-FEM-P6-002]
+    acceptance:
+      - comprehension_measured
+      - comfort_measured
+      - retention_measured
+      - emotional_safety_reviewed
+      - high_severity_findings_resolved
+
+  - id: TV-FEM-P7-001
+    title: Prepare limited active rollout
+    phase: P7
+    priority: critical
+    dependencies: [TV-FEM-P6-001, TV-FEM-P6-002, TV-FEM-P6-003]
+    acceptance:
+      - rollback_tested
+      - approved_devices
+      - approved_language_pack
+      - approved_cues
+      - privacy_review
+      - release_gates_passed

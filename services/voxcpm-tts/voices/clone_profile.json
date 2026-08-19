@@ -1,0 +1,10 @@
+{
+  "id": "clone",
+  "mode": "clone",
+  "description": "",
+  "reference_audio_path": null,
+  "cfg_value": 2.0,
+  "inference_timesteps": 8,
+  "normalize": true,
+  "denoise": false
+}

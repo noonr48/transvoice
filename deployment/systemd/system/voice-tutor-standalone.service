@@ -1,0 +1,27 @@
+[Unit]
+Description=SLOANE Voice Tutor Standalone Gateway
+Documentation=file:/opt/sloane/voice-tutor/deployment/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=sloane-voice
+Group=sloane-voice
+WorkingDirectory=/opt/sloane/voice-tutor/backend
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/sloane/voice-standalone.env
+ExecStart=/usr/bin/env node /opt/sloane/voice-tutor/backend/voice-standalone-server.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGINT
+StateDirectory=sloane/voice-standalone
+StateDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/sloane/voice-standalone
+
+[Install]
+WantedBy=multi-user.target

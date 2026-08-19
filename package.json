@@ -1,0 +1,28 @@
+{
+  "name": "transvoice-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TransVoice — standalone AI voice coaching application",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "npm run test:backend && npm run test:frontend && npm run test:python",
+    "test:backend": "cd backend && node --test",
+    "test:frontend": "cd frontend && npx vitest run && npx tsc --noEmit",
+    "test:python": "bash scripts/test-python.sh",
+    "test:integration": "node --test tests/",
+    "doctor": "node scripts/voice-standalone-doctor.mjs",
+    "doctor:full": "node scripts/transvoice-doctor.js",
+    "doctor:quick": "node scripts/transvoice-doctor.js --quick",
+    "deploy:check": "node scripts/deploy-check.cjs",
+    "sync": "node scripts/sync-from-sloane-ui.cjs",
+    "sync:check": "node scripts/sync-from-sloane-ui.cjs --check"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "multer": "^2.2.0",
+    "ws": "^8.19.0"
+  }
+}

@@ -1,0 +1,3050 @@
+/* ═══════════════════════════════════════════════════════════════
+   Voice Tutor — Modern Dark Theme Redesign
+   Inspired by Linear, Vercel, Raycast
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Global .hidden utility ──────────────────────────────────────────
+   The frontend TS (front-door.ts:64, standalone-app.ts, lesson/*) toggles a `.hidden`
+   class to show/hide panels via the `.hidden { display: none !important }` convention.
+   In the original sloane-ui this lived in src/styles.css:9674; the standalone extraction
+   brought the TS that USES .hidden but not the CSS that DEFINES it, so every .hidden
+   toggle was a no-op (the class was added but nothing hid the element). This restores it. */
+.hidden { display: none !important; }
+
+:root {
+  /* Surface palette — warm "engineered instrument" sage-grey (Open Design voice-cockpit target) */
+  --vt-bg: #282b29;
+  --vt-bg-raised: #2f332f;
+  --vt-bg-sunken: #21241f;
+  --vt-bg-card: #343835;
+  --vt-bg-card-hover: #3c413d;
+  --vt-bg-input: #262a26;
+  --vt-bg-overlay: rgba(20, 23, 20, 0.7);
+
+  /* Border palette — sage-tinted hairlines */
+  --vt-border: rgba(205, 211, 204, 0.16);
+  --vt-border-subtle: rgba(205, 211, 204, 0.1);
+  --vt-border-focus: rgba(155, 199, 194, 0.55);
+
+  /* Text palette */
+  --vt-text: #d7dbd5;
+  --vt-text-secondary: #9fa79f;
+  /* a11y: raised from #767e76 (≈3.0:1) to ≥4.5:1 on both --vt-bg (#282b29) and
+     --vt-bg-sunken (#21241f). #98a098 ≈ 5.0:1 on #21241f, ≈ 4.7:1 on #282b29. */
+  --vt-text-tertiary: #98a098;
+  --vt-text-inverse: #30342f;
+
+  /* Accent palette — cyan instrument accent (deliberately NOT generic indigo) */
+  --vt-accent: #9bc7c2;
+  --vt-accent-hover: #b3d4cf;
+  --vt-accent-dim: rgba(155, 199, 194, 0.13);
+  --vt-accent-glow: rgba(155, 199, 194, 0.06);
+  --vt-accent-halo-soft: rgba(155, 199, 194, 0.22);
+  --vt-accent-halo-strong: rgba(155, 199, 194, 0.55);
+
+  /* Status palette — muted, one budget per meaning */
+  --vt-green: #a7c49a;
+  --vt-green-dim: rgba(167, 196, 154, 0.13);
+  --vt-yellow: #d2b783;
+  --vt-yellow-dim: rgba(210, 183, 131, 0.13);
+  --vt-red: #c89797;
+  --vt-red-dim: rgba(200, 151, 151, 0.13);
+  --vt-orange: #d2b783;
+  --vt-blue: #9bc7c2;
+
+  /* Graph palette — reference = amber (target line), live = cyan (your take) */
+  --vt-graph-bg: #21241f;
+  --vt-graph-grid: rgba(210, 214, 207, 0.05);
+  --vt-graph-target: rgba(199, 204, 195, 0.1);
+  --vt-graph-target-border: rgba(199, 204, 195, 0.56);
+  --vt-graph-dot: #9bc7c2;
+  --vt-graph-dot-ring: #eef6f4;
+  --vt-graph-dot-light: rgba(143, 169, 156, 0.96);
+  --vt-graph-dot-light-soft: rgba(143, 169, 156, 0.16);
+  --vt-graph-dot-light-strong: rgba(143, 169, 156, 0.38);
+  --vt-graph-dot-mid: rgba(174, 180, 173, 0.96);
+  --vt-graph-dot-mid-soft: rgba(174, 180, 173, 0.16);
+  --vt-graph-dot-mid-strong: rgba(174, 180, 173, 0.38);
+  --vt-graph-dot-heavy: rgba(205, 209, 202, 0.96);
+  --vt-graph-dot-heavy-soft: rgba(205, 209, 202, 0.16);
+  --vt-graph-dot-heavy-strong: rgba(205, 209, 202, 0.38);
+  --vt-graph-reference-fill: rgba(174, 180, 173, 0.18);
+  --vt-graph-reference-border: rgba(205, 209, 202, 0.62);
+  --vt-graph-reference-halo-soft: rgba(174, 180, 173, 0.08);
+  --vt-graph-reference-halo-strong: rgba(205, 209, 202, 0.18);
+  --vt-graph-reference: #d2b783;
+  --vt-graph-forecast: #a7c49a;
+  --vt-graph-live: #9bc7c2;
+
+  /* Lesson surface (Wave B) — focus-axis accents + karaoke states (calm). */
+  --vt-lesson-prosody: #b9a7d0;
+
+  /* Spacing */
+  --vt-gap-xs: 4px;
+  --vt-gap-sm: 8px;
+  --vt-gap-md: 12px;
+  --vt-gap-lg: 16px;
+  --vt-gap-xl: 24px;
+  --vt-gap-2xl: 32px;
+
+  /* Radius */
+  --vt-radius-sm: 6px;
+  --vt-radius-md: 8px;
+  --vt-radius-lg: 12px;
+  --vt-radius-xl: 16px;
+
+  /* Shadows */
+  --vt-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --vt-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --vt-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  /* Typography */
+  --vt-font: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --vt-font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --vt-font-size-xs: 11px;
+  --vt-font-size-sm: 12px;
+  --vt-font-size-md: 13px;
+  --vt-font-size-lg: 15px;
+  --vt-font-size-xl: 18px;
+  --vt-font-size-2xl: 24px;
+
+  /* Transitions */
+  --vt-transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --vt-surface-soft: rgba(255, 255, 255, 0.04);
+}
+
+/* ── Global Reset ────────────────────────────────────────────── */
+
+#app.voice-tutor-standalone-app {
+  background: var(--vt-bg);
+  color: var(--vt-text);
+  font-family: var(--vt-font);
+  font-size: var(--vt-font-size-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app.voice-tutor-standalone-app * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--vt-border) transparent;
+}
+
+#app.voice-tutor-standalone-app *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+#app.voice-tutor-standalone-app *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#app.voice-tutor-standalone-app *::-webkit-scrollbar-thumb {
+  background: var(--vt-border);
+  border-radius: 3px;
+}
+
+/* ── Global Focus Ring (a11y) ────────────────────────────────── */
+
+/* Keyboard-only focus ring. The component-level `outline: none` rules on
+   inputs/selects/.voice-overlay-toggle are scoped to :focus, so this
+   :focus-visible fallback is NOT overridden and keyboard users always get a
+   visible ring. */
+#app.voice-tutor-standalone-app :focus-visible {
+  outline: 2px solid var(--vt-accent);
+  outline-offset: 2px;
+}
+
+/* Explicit coverage for the interactive primitives (their own :focus rules
+   set outline:none, but :focus-visible wins for keyboard nav). */
+#app.voice-tutor-standalone-app .voice-btn:focus-visible,
+#app.voice-tutor-standalone-app .voice-pill:focus-visible,
+#app.voice-tutor-standalone-app .voice-overlay-toggle:focus-visible,
+#app.voice-tutor-standalone-app .voice-spine-step:focus-visible,
+#app.voice-tutor-standalone-app .voice-upload-btn:focus-visible,
+#app.voice-tutor-standalone-app .voice-front-door-card label[role="button"]:focus-visible {
+  outline: 2px solid var(--vt-accent);
+  outline-offset: 2px;
+}
+
+/* ── Top Bar ─────────────────────────────────────────────────── */
+
+.voice-tutor-standalone-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--vt-gap-md) var(--vt-gap-xl);
+  background: var(--vt-bg-raised);
+  border-bottom: 1px solid var(--vt-border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(12px);
+}
+
+.voice-tutor-standalone-kicker {
+  font-size: var(--vt-font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--vt-accent);
+}
+
+.voice-tutor-standalone-topbar strong {
+  display: block;
+  font-size: var(--vt-font-size-lg);
+  font-weight: 600;
+  color: var(--vt-text);
+  margin-top: 2px;
+}
+
+.voice-tutor-standalone-status {
+  display: flex;
+  align-items: center;
+  gap: var(--vt-gap-sm);
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+}
+
+.voice-tutor-standalone-status a {
+  color: var(--vt-text-tertiary);
+  text-decoration: none;
+  transition: color var(--vt-transition);
+}
+
+.voice-tutor-standalone-status a:hover {
+  color: var(--vt-text-secondary);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.online {
+  background: var(--vt-green);
+  box-shadow: 0 0 8px var(--vt-green-dim);
+}
+
+.status-dot.offline {
+  background: var(--vt-red);
+  box-shadow: 0 0 8px var(--vt-red-dim);
+}
+
+.status-dot.degraded {
+  background: var(--vt-yellow);
+  box-shadow: 0 0 8px var(--vt-yellow-dim);
+}
+
+/* ── Health Panel ────────────────────────────────────────────── */
+
+.voice-standalone-health-panel {
+  padding: var(--vt-gap-md) var(--vt-gap-xl);
+  background: var(--vt-bg-raised);
+  border-bottom: 1px solid var(--vt-border-subtle);
+}
+
+.voice-standalone-health-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--vt-gap-md);
+  margin-bottom: var(--vt-gap-sm);
+}
+
+.voice-standalone-health-heading strong {
+  font-size: var(--vt-font-size-sm);
+  font-weight: 600;
+  color: var(--vt-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.voice-standalone-health-heading span {
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-tertiary);
+}
+
+.voice-standalone-health-action {
+  margin-left: auto;
+  padding: 4px 10px;
+  font-size: var(--vt-font-size-xs);
+  font-weight: 500;
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-sm);
+  cursor: pointer;
+  transition: all var(--vt-transition);
+}
+
+.voice-standalone-health-action:hover {
+  background: var(--vt-bg-card-hover);
+  color: var(--vt-text);
+  border-color: var(--vt-border-focus);
+}
+
+.voice-standalone-health-layers {
+  display: flex;
+  gap: var(--vt-gap-lg);
+  flex-wrap: wrap;
+}
+
+.voice-standalone-health-layer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--vt-font-size-sm);
+}
+
+.voice-standalone-health-layer strong {
+  font-weight: 500;
+  color: var(--vt-text);
+}
+
+.voice-standalone-health-layer .status-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* ── Main Layout ─────────────────────────────────────────────── */
+
+/* Shell wrapper — absorbs the base layout the (now-unlinked) legacy styles.css
+   used to provide for the standalone shell, so the cockpit is fully self-contained
+   on redesign.css alone (per code review). #app already sets base bg + --vt-text. */
+.voice-tutor-standalone-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.voice-tutor-standalone-main {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  grid-template-rows: auto auto 1fr;
+  gap: 0;
+  min-height: calc(100vh - 100px);
+}
+
+.voice-tutor-standalone-source-panel {
+  display: none !important;
+}
+
+/* ── Lab Panel ───────────────────────────────────────────────── */
+
+.voice-lab-panel {
+  display: contents !important;
+}
+
+.voice-lab-panel.hidden {
+  /* Must fully hide the panel AND its children. The base rule above uses
+     display:contents (a transparent wrapper so the cockpit grid joins the
+     laboratory-pane layout); contents only removes the element's own box, so
+     copying it here let the voice front-door + session spine leak onto every
+     non-voice tab. The .hidden modifier must collapse the whole subtree. */
+  display: none !important;
+}
+
+/* ── Studio Hero ─────────────────────────────────────────────── */
+
+.voice-studio-hero {
+  display: none !important;
+}
+
+/* ── Cockpit Toolbar ─────────────────────────────────────────── */
+
+.voice-cockpit-toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--vt-gap-lg);
+  padding: var(--vt-gap-md) var(--vt-gap-xl);
+  background: var(--vt-bg-raised);
+  border-bottom: 1px solid var(--vt-border-subtle);
+}
+
+.voice-cockpit-toolbar .voice-control {
+  display: flex;
+  align-items: center;
+  gap: var(--vt-gap-sm);
+}
+
+.voice-cockpit-toolbar .voice-control span {
+  font-size: var(--vt-font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--vt-text-tertiary);
+}
+
+.voice-cockpit-toolbar select {
+  padding: 6px 10px;
+  font-size: var(--vt-font-size-sm);
+  font-weight: 500;
+  color: var(--vt-text);
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-sm);
+  cursor: pointer;
+  transition: all var(--vt-transition);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%238b8b8e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 28px;
+}
+
+.voice-cockpit-toolbar select:hover {
+  border-color: var(--vt-text-tertiary);
+}
+
+.voice-cockpit-toolbar select:focus {
+  outline: none;
+  border-color: var(--vt-border-focus);
+  box-shadow: 0 0 0 3px var(--vt-accent-dim);
+}
+
+/* Status strip */
+.voice-status-strip-cockpit {
+  display: flex;
+  gap: var(--vt-gap-md);
+  margin-left: auto;
+}
+
+/* Telemetry de-emphasis: chips read as flat, borderless secondary readouts so
+   they never compete with the single elevated focal block. */
+.voice-status-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--vt-bg-sunken);
+  border: 1px solid transparent;
+  border-radius: var(--vt-radius-sm);
+  font-size: var(--vt-font-size-xs);
+}
+
+/* Section eyebrow — de-shouted (June sweep, landed 2026-07-19): sentence-case,
+   normal tracking, matching .voice-script-performance-label. The old uppercase
+   mono treatment read as shouting at the head of every panel. */
+.voice-chip-label {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--vt-text-secondary);
+  font-size: var(--vt-font-size-xs);
+}
+
+.voice-status-chip strong {
+  font-weight: 500;
+  color: var(--vt-text-secondary);
+  font-size: var(--vt-font-size-xs);
+}
+
+/* Lab actions */
+.voice-lab-actions {
+  display: flex;
+  gap: var(--vt-gap-sm);
+}
+
+/* ── Learner Context Strip (REMOVED from surface) ─────────────── */
+
+/* The duplicate learner-context strip is removed from the main surface by the
+   template (data lives in the sidebar #voice-learner-context-status). This rule
+   is dead/harmless and retained only so the takeover hide-list selector and any
+   stale markup degrade cleanly. */
+.voice-learner-context-strip {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: var(--vt-gap-md);
+  padding: var(--vt-gap-sm) var(--vt-gap-xl);
+  background: var(--vt-bg-sunken);
+  border-bottom: 1px solid var(--vt-border-subtle);
+  overflow-x: auto;
+}
+
+/* ── Script Pad ──────────────────────────────────────────────── */
+
+.voice-script-pad {
+  grid-column: 1;
+  /* Tightened (xl→lg padding, lg→md gap) so the practice band is shorter and the
+     live graph rises closer to the line — the line→signal loop in one glance. */
+  padding: var(--vt-gap-lg) var(--vt-gap-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--vt-gap-md);
+}
+
+.voice-script-pad-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--vt-gap-lg);
+}
+
+/* Generic script-pad heading. Kept modest so it does not compete at 2xl when
+   it is NOT the focal line; the focal line IS this h3 (#voice-active-line-text)
+   and the hero rule below (higher specificity) raises it to the hero tier. */
+.voice-script-pad-top h3 {
+  font-size: var(--vt-font-size-xl);
+  font-weight: 600;
+  color: var(--vt-text);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+/* Lesson-board label demotes from the loud uppercase chip to a quiet
+   sentence-case secondary caption — the hero line carries the focus. */
+#voice-script-pad-label {
+  font-family: var(--vt-font);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--vt-font-size-xs);
+  color: var(--vt-text-secondary);
+}
+
+/* OPTIONAL helper: scope the single focal elevation + hero tier to the
+   top-of-column practice block (used on the .voice-script-pad-top wrapper). */
+.voice-hero-line {
+  display: flex;
+  flex-direction: column;
+  gap: var(--vt-gap-sm);
+}
+
+.voice-script-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.voice-script-performance {
+  padding: var(--vt-gap-md) var(--vt-gap-lg);
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+}
+
+.voice-script-performance-label {
+  display: block;
+  font-size: var(--vt-font-size-xs);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--vt-text-secondary);
+  margin-bottom: var(--vt-gap-xs);
+}
+
+.voice-script-performance p {
+  font-size: var(--vt-font-size-md);
+  color: var(--vt-text-secondary);
+  font-family: var(--vt-font-mono);
+  font-size: var(--vt-font-size-sm);
+  line-height: 1.6;
+}
+
+/* Cue pills */
+.voice-script-cues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.voice-script-note {
+  padding: var(--vt-gap-md) var(--vt-gap-lg);
+  background: var(--vt-accent-glow);
+  border: 1px solid var(--vt-accent-dim);
+  border-radius: var(--vt-radius-md);
+}
+
+.voice-script-note .voice-script-performance-label {
+  color: var(--vt-accent);
+}
+
+.voice-script-note p {
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+}
+
+/* ── Practice Transport ──────────────────────────────────────── */
+
+/* The Arm-Practice transport block — now FLAT (hairline only) and compact. The
+   single elevated element per viewport is the live graph (the real instrument);
+   the transport recedes so it never competes with the signal. */
+.voice-script-practice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--vt-gap-md);
+  padding: var(--vt-gap-md) var(--vt-gap-lg);
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-lg);
+}
+
+.voice-practice-transport {
+  display: flex;
+  align-items: center;
+  gap: var(--vt-gap-md);
+}
+
+.voice-practice-transport .voice-chip-label {
+  flex-shrink: 0;
+}
+
+.voice-inline-actions {
+  display: flex;
+  gap: var(--vt-gap-sm);
+  flex-wrap: wrap;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+
+.voice-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: var(--vt-font-size-sm);
+  font-weight: 500;
+  font-family: var(--vt-font);
+  border-radius: var(--vt-radius-sm);
+  cursor: pointer;
+  transition: all var(--vt-transition);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.voice-btn-primary {
+  background: var(--vt-accent);
+  color: var(--vt-text-inverse);
+  border-color: var(--vt-accent);
+}
+
+.voice-btn-primary:hover {
+  background: var(--vt-accent-hover);
+  box-shadow: 0 0 16px var(--vt-accent-dim);
+}
+
+.voice-btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.voice-btn-secondary {
+  background: var(--vt-bg-card);
+  color: var(--vt-text-secondary);
+  border-color: var(--vt-border);
+}
+
+.voice-btn-secondary:hover {
+  background: var(--vt-bg-card-hover);
+  color: var(--vt-text);
+  border-color: var(--vt-text-tertiary);
+}
+
+/* ── Pills ───────────────────────────────────────────────────── */
+
+.voice-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  font-size: var(--vt-font-size-xs);
+  font-weight: 500;
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: 100px;
+  cursor: pointer;
+  transition: all var(--vt-transition);
+}
+
+.voice-pill:hover {
+  background: var(--vt-bg-card-hover);
+  color: var(--vt-text);
+  border-color: var(--vt-border);
+}
+
+/* ── Cockpit Grid ────────────────────────────────────────────── */
+
+.voice-cockpit-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 0;
+  min-height: 500px;
+  /* Lead with the live loop: the cockpit-grid (line + graph + coach) is ordered
+     BEFORE the script-pad controls band and the advanced drawer, so the practice
+     instrument is the first thing on screen, not buried below the setup controls. */
+  order: 1;
+}
+.voice-lab-panel .voice-script-pad { order: 2; }
+.voice-lab-panel .voice-advanced-drawer { order: 3; }
+
+.voice-cockpit-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-right: 1px solid var(--vt-border-subtle);
+}
+
+/* ── Active Drill Card ───────────────────────────────────────── */
+
+.voice-active-drill-card {
+  padding: var(--vt-gap-xl);
+  border-bottom: 1px solid var(--vt-border-subtle);
+}
+
+.voice-active-drill-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--vt-gap-md);
+  margin-bottom: var(--vt-gap-md);
+}
+
+.voice-active-drill-header h3 {
+  font-size: var(--vt-font-size-lg);
+  font-weight: 600;
+  color: var(--vt-text);
+}
+
+.voice-active-drill-header p {
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+  margin-top: 4px;
+}
+
+.voice-panel-badge,
+.voice-stage-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  font-size: var(--vt-font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border);
+  border-radius: 100px;
+  flex-shrink: 0;
+}
+
+.voice-active-drill-summary {
+  margin-bottom: var(--vt-gap-md);
+}
+
+.voice-active-results {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--vt-gap-md);
+  margin-bottom: var(--vt-gap-md);
+}
+
+.voice-active-result-card {
+  padding: var(--vt-gap-md);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+}
+
+.voice-active-result-card .voice-chip-label {
+  margin-bottom: 4px;
+}
+
+.voice-active-result-card p {
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+}
+
+/* ── Stage Panel (XY Map) ────────────────────────────────────── */
+
+.voice-stage-panel {
+  flex: 1;
+  padding: var(--vt-gap-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--vt-gap-lg);
+}
+
+.voice-stage-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--vt-gap-md);
+}
+
+.voice-stage-header h4 {
+  font-size: var(--vt-font-size-lg);
+  font-weight: 600;
+  color: var(--vt-text);
+}
+
+.voice-stage-header p {
+  font-size: var(--vt-font-size-xs);
+  color: var(--vt-text-tertiary);
+  margin-top: 2px;
+  max-width: 400px;
+}
+
+/* Graph shell — the live instrument is THE hero of the cockpit: largest surface,
+   the single elevated element (shadow + accent hairline), so the eye lands here. */
+.voice-graph-shell {
+  position: relative;
+  flex: 1;
+  min-height: clamp(360px, 46vh, 560px);
+  background: var(--vt-graph-bg);
+  border: 1px solid var(--vt-border-focus);
+  border-radius: var(--vt-radius-lg);
+  overflow: hidden;
+  box-shadow: var(--vt-shadow-md);
+}
+
+.voice-axis-label {
+  position: absolute;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--vt-text-tertiary);
+  pointer-events: none;
+}
+
+.voice-axis-label-y {
+  left: 12px;
+  top: 12px;
+  writing-mode: vertical-lr;
+  transform: rotate(180deg);
+}
+
+.voice-axis-label-x {
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.voice-graph-grid {
+  position: absolute;
+  inset: 30px;
+  background:
+    linear-gradient(var(--vt-graph-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--vt-graph-grid) 1px, transparent 1px);
+  background-size: 25% 25%;
+}
+
+.voice-graph-target {
+  position: absolute;
+  inset: 20%;
+  background: var(--vt-graph-target);
+  border: 1px dashed var(--vt-graph-target-border);
+  border-radius: var(--vt-radius-md);
+}
+
+/* The live dot is the user's own voice, right now — it must be the loudest,
+   most trackable mark on the map: larger, a crisp light ring, a strong halo. */
+.voice-graph-dot {
+  position: absolute;
+  width: var(--voice-dot-size, 18px);
+  height: var(--voice-dot-size, 18px);
+  background: var(--voice-dot-color, var(--vt-graph-dot));
+  border: 2px solid var(--vt-graph-dot-ring);
+  border-radius: 50%;
+  top: var(--voice-dot-top, 50%);
+  left: var(--voice-dot-left, 50%);
+  transform: translate(-50%, -50%);
+  box-shadow:
+    0 0 0 var(--voice-dot-halo-spread, 5px) var(--voice-dot-halo-soft, var(--vt-accent-halo-soft)),
+    0 0 var(--voice-dot-halo-glow, 22px) var(--voice-dot-halo-strong, var(--vt-accent-halo-strong));
+  opacity: var(--voice-dot-opacity, 1);
+  transition: top 100ms ease, left 100ms ease;
+  z-index: 10;
+}
+
+.voice-graph-dot-light {
+  --voice-dot-color: var(--vt-graph-dot-light);
+  --voice-dot-halo-soft: var(--vt-graph-dot-light-soft);
+  --voice-dot-halo-strong: var(--vt-graph-dot-light-strong);
+}
+
+.voice-graph-dot-mid {
+  --voice-dot-color: var(--vt-graph-dot-mid);
+  --voice-dot-halo-soft: var(--vt-graph-dot-mid-soft);
+  --voice-dot-halo-strong: var(--vt-graph-dot-mid-strong);
+}
+
+.voice-graph-dot-heavy {
+  --voice-dot-color: var(--vt-graph-dot-heavy);
+  --voice-dot-halo-soft: var(--vt-graph-dot-heavy-soft);
+  --voice-dot-halo-strong: var(--vt-graph-dot-heavy-strong);
+}
+
+.voice-graph-crosshair {
+  position: absolute;
+  background: var(--vt-border-subtle);
+}
+
+.voice-graph-crosshair-x {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+}
+
+.voice-graph-crosshair-y {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+}
+
+/* SVG paths */
+.voice-live-path polyline,
+.voice-live-polyline {
+  fill: none;
+  stroke: var(--vt-graph-live);
+  /* The live trail is the user's OWN voice — it must read as the loudest line on
+     the map: thickest + a soft glow, clearly above the reference and forecast. */
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px var(--vt-accent-halo-strong));
+}
+
+.voice-forecast-path polyline,
+.voice-forecast-polyline {
+  fill: none;
+  stroke: var(--vt-graph-forecast);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  /* Forecast is a hint — recede it (0.6→0.4) so it never competes with the live trail. */
+  opacity: 0.4;
+}
+
+.voice-reference-path polyline,
+.voice-reference-polyline {
+  fill: none;
+  stroke: var(--vt-graph-reference);
+  /* P0.1c: the green reference path is the target you're moving toward — solid + forward. */
+  stroke-width: 1.75;
+  opacity: 0.85;
+}
+
+/* Live cue: the single "right now" coaching line, bound to the graph. Promoted
+   to a prominent size/weight so the guidance reads at a glance during a take. */
+.voice-live-cue {
+  margin: var(--vt-gap-md) 0;
+  text-align: center;
+  color: var(--vt-text);
+  font-size: var(--vt-font-size-lg);
+  font-weight: 600;
+  line-height: 1.4;
+  min-height: 1.4em;
+}
+
+/* Front-door takeover: while #voice-lab-panel carries vt-front-door-open the
+   relocated front-door is the FIRST child and the ONLY thing on screen — every
+   other practice surface is hidden so the door never reads as a peer card. */
+#voice-lab-panel.vt-front-door-open .voice-cockpit-toolbar,
+#voice-lab-panel.vt-front-door-open #voice-session-spine,
+#voice-lab-panel.vt-front-door-open .voice-spine-hint,
+#voice-lab-panel.vt-front-door-open .voice-learner-context-strip,
+#voice-lab-panel.vt-front-door-open .voice-script-pad,
+#voice-lab-panel.vt-front-door-open .voice-cockpit-grid,
+#voice-lab-panel.vt-front-door-open .voice-advanced-drawer {
+  display: none !important;
+}
+
+/* P0.1a voice-copy front door: the first screen of a session, now the true
+   stage takeover. As the new first child of #voice-lab-panel it spans the full
+   grid and fills the viewport so it reads as the sole foreground. */
+.voice-front-door {
+  grid-column: 1 / -1;
+  display: grid;
+  place-items: center;
+  min-height: calc(100vh - 160px);
+  padding: var(--vt-gap-xl) var(--vt-gap-lg);
+}
+.voice-front-door-card {
+  max-width: 540px;
+  text-align: center;
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-lg);
+  padding: var(--vt-gap-xl);
+  box-shadow: var(--vt-shadow-lg);
+}
+.voice-front-door-card h3 {
+  margin: var(--vt-gap-sm) 0;
+  color: var(--vt-text);
+}
+.voice-front-door-card p {
+  color: var(--vt-text-secondary);
+  font-size: var(--vt-font-size-sm);
+}
+.voice-front-door-actions {
+  display: flex;
+  gap: var(--vt-gap-sm);
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: var(--vt-gap-lg);
+}
+.voice-front-door-fallback {
+  margin-top: var(--vt-gap-md);
+  background: none;
+  border: none;
+  color: var(--vt-text-tertiary);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: var(--vt-font-size-sm);
+}
+.voice-front-door-fallback:hover {
+  color: var(--vt-text-secondary);
+}
+
+/* Abandon-trigger fix 1: calm chooser line when the mic can't open — ink, not
+   an error-wall; sits above the preset peer button it points at. */
+.voice-front-door-mic-denied {
+  margin-top: var(--vt-gap-md);
+  color: var(--vt-text-secondary);
+  font-size: var(--vt-font-size-sm);
+}
+
+/* Abandon-trigger fix 2a: the degraded-boot Retry under the coach thread — a
+   quiet secondary action, 44px touch floor by law. */
+.voice-degraded-retry {
+  align-self: center;
+  margin-top: var(--vt-gap-sm);
+  min-height: 44px;
+  min-width: 44px;
+  padding: 9px 18px;
+  font-size: var(--vt-font-size-sm);
+  font-weight: 500;
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-degraded-retry:hover {
+  color: var(--vt-text);
+  border-color: var(--vt-border);
+}
+.voice-degraded-retry:focus-visible {
+  outline: 2px solid var(--vt-accent);
+  outline-offset: 2px;
+}
+.voice-degraded-retry[disabled] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Orientation beat: the first-run welcome card. Shares the chooser card base;
+   the capability list reads left-aligned inside the centered card. */
+.voice-front-door-welcome {
+  max-width: 36rem;
+}
+.voice-front-door-welcome-list {
+  list-style: none;
+  margin: var(--vt-gap-lg) 0 0;
+  padding: 0;
+  text-align: left;
+  display: grid;
+  gap: var(--vt-gap-sm);
+}
+.voice-front-door-welcome-list li {
+  position: relative;
+  padding-left: 1.35rem;
+  color: var(--vt-text-secondary);
+  font-size: var(--vt-font-size-sm);
+  line-height: 1.5;
+}
+.voice-front-door-welcome-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: var(--vt-accent);
+  opacity: 0.75;
+}
+
+/* P0.1b session spine: Warm-up -> Target -> Practice -> Review progress header. */
+.voice-session-spine {
+  display: flex;
+  gap: var(--vt-gap-md);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--vt-gap-sm) var(--vt-gap-md);
+  margin-bottom: var(--vt-gap-md);
+}
+/* Real 4-step stepper (Warm-up → Target → Practice → Review): pill treatment
+   driven from sessionStage. Default = upcoming; .done = completed (✓);
+   .active = current accent pill + aria-current. No breadcrumb separator. */
+.voice-spine-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 100px;
+  color: var(--vt-text-tertiary);
+  background: transparent;
+  border: 1px solid var(--vt-border-subtle);
+  font-size: var(--vt-font-size-sm);
+  font-weight: 500;
+  transition: all var(--vt-transition);
+}
+.voice-spine-step.done {
+  color: var(--vt-text-secondary);
+  border-color: var(--vt-border-subtle);
+}
+.voice-spine-step.done::before {
+  content: '✓';
+  color: var(--vt-green);
+  font-weight: 700;
+}
+.voice-spine-step.active {
+  color: var(--vt-accent);
+  background: var(--vt-accent-dim);
+  border-color: var(--vt-border-focus);
+  font-weight: 600;
+}
+
+/* Per-stage "do this next" guidance line below the spine. */
+.voice-spine-hint {
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+  margin: var(--vt-gap-xs) 0 var(--vt-gap-md);
+}
+
+/* Approach B: focus line with target-pronunciation emphasis woven in (a delivery map,
+   not standard spelling). Driven by the cue tokens' emphasis (backend cascade). */
+/* THE single hero focal element: the guided line, promoted to a ~30-40px hero
+   tier at the top of the practice column. */
+#voice-active-line-text {
+  /* Calmed from clamp(30-40px)/800: the line must be clearly readable but must
+     NOT out-shout the live signal (graph + dot + cue) — that was the hierarchy
+     inversion. The instrument is the hero now; the line is its caption. */
+  font-size: clamp(22px, 2.6vw, 30px);
+  font-weight: 700;
+  line-height: 1.2;
+}
+#voice-active-line-text .voice-fl-bright {
+  color: var(--vt-yellow); /* land it brighter / forward */
+}
+#voice-active-line-text .voice-fl-lift::after {
+  content: '↗'; /* pitch lift on the rising end */
+  margin-left: 1px;
+  color: var(--vt-accent);
+  font-size: 0.62em;
+  font-weight: 700;
+  vertical-align: super;
+}
+#voice-active-line-text .voice-fl-light {
+  color: var(--vt-text-secondary); /* soft onset */
+  font-weight: 600;
+}
+
+/* Reference dot */
+.voice-reference-dot {
+  position: absolute;
+  width: var(--voice-dot-size, 10px);
+  height: var(--voice-dot-size, 10px);
+  top: var(--voice-dot-top, 50%);
+  left: var(--voice-dot-left, 50%);
+  background: var(--vt-graph-reference-fill);
+  border: 2px dashed var(--vt-graph-reference-border);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow:
+    0 0 0 var(--voice-dot-halo-spread, 3px) var(--vt-graph-reference-halo-soft),
+    0 0 var(--voice-dot-halo-glow, 10px) var(--vt-graph-reference-halo-strong);
+  opacity: var(--voice-dot-opacity, 1);
+}
+
+/* ── Stage Overlays ──────────────────────────────────────────── */
+
+.voice-stage-overlays {
+  display: flex;
+  gap: var(--vt-gap-sm);
+}
+
+.voice-overlay-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: var(--vt-font-size-xs);
+  font-weight: 500;
+  color: var(--vt-text-tertiary);
+  background: transparent;
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: 100px;
+  cursor: pointer;
+  transition: all var(--vt-transition);
+}
+
+.voice-overlay-toggle.active {
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-card);
+  border-color: var(--vt-border);
+}
+
+.voice-overlay-toggle:hover {
+  color: var(--vt-text);
+}
+
+.voice-overlay-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.voice-overlay-swatch.live {
+  background: var(--vt-graph-live);
+}
+
+.voice-overlay-swatch.forecast {
+  background: var(--vt-graph-forecast);
+}
+
+.voice-overlay-swatch.reference {
+  background: var(--vt-graph-reference);
+}
+
+/* ── Reference Block ─────────────────────────────────────────── */
+
+.voice-reference-block {
+  padding: var(--vt-gap-md);
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+}
+
+.voice-reference-player {
+  width: 100%;
+  height: 36px;
+  margin-top: var(--vt-gap-sm);
+  border-radius: var(--vt-radius-sm);
+}
+
+.voice-reference-help {
+  font-size: var(--vt-font-size-xs);
+  color: var(--vt-text-tertiary);
+  line-height: 1.5;
+}
+
+/* ── Stage Meta Stats ────────────────────────────────────────── */
+
+.voice-stage-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--vt-gap-sm);
+}
+
+.voice-stage-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--vt-gap-sm) var(--vt-gap-md);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+}
+
+/* Field/stat label — sentence-case, normal weight (no SHOUTING). The loud
+   uppercase mono treatment is reserved for true section headers only. */
+.voice-stage-stat span {
+  font-size: var(--vt-font-size-xs);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--vt-text-secondary);
+}
+
+.voice-stage-stat strong {
+  font-size: var(--vt-font-size-sm);
+  font-weight: 500;
+  color: var(--vt-text-secondary);
+  font-family: var(--vt-font-mono);
+}
+
+.voice-stage-stat-detail {
+  display: none;
+}
+
+/* Declutter (2026-07-19): the stage row keeps three live stats — Target,
+   Reference, Zone Hold. Every detail tile (now including Phrase Map and
+   Path Match) reveals with the existing Advanced drawer — same disclosure,
+   no new control. Browsers without :has() simply keep them folded. */
+#voice-lab-panel:has(#voice-advanced-content:not(.hidden)) .voice-stage-stat-detail {
+  display: flex;
+}
+
+/* ── Review Panel (stage-gated) ──────────────────────────────── */
+
+/* Flat card built strictly on existing per-session signals (attemptArtifacts,
+   lastSummary, sessionStartedAt). Hidden by the global .hidden rule until
+   sessionStage === 'review'. Hairline border only — no shadow (the one
+   elevation tier belongs to the focal practice block). */
+.voice-review-panel {
+  padding: var(--vt-gap-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--vt-gap-md);
+  border-bottom: 1px solid var(--vt-border-subtle);
+}
+
+.voice-review-panel h4 {
+  font-size: var(--vt-font-size-lg);
+  font-weight: 600;
+  color: var(--vt-text);
+}
+
+#voice-review-summary {
+  font-size: var(--vt-font-size-md);
+  color: var(--vt-text);
+}
+
+.voice-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Flat per-take row: borderless on top of the sunken surface, mono metric
+   values. Reuses the .voice-active-result-card rhythm. */
+.voice-review-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vt-gap-md);
+  padding: var(--vt-gap-sm) var(--vt-gap-md);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+}
+
+.voice-review-list-row .voice-review-row-metric,
+.voice-review-list-row time {
+  font-family: var(--vt-font-mono);
+  color: var(--vt-text);
+}
+
+#voice-review-focus {
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+}
+
+/* ── Coach Rail ──────────────────────────────────────────────── */
+
+.voice-coach-rail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--vt-bg-raised);
+}
+
+.voice-coach-rail-header {
+  padding: var(--vt-gap-lg);
+  border-bottom: 1px solid var(--vt-border-subtle);
+}
+
+.voice-coach-rail-header h3 {
+  font-size: var(--vt-font-size-lg);
+  font-weight: 600;
+  color: var(--vt-text);
+}
+
+/* Ambient session scope (abandon-trigger fix 6): a calm tier pill in the rail
+   header — a control, never a prompt. 44px touch floor by law. */
+.voice-session-scope {
+  margin-top: var(--vt-gap-sm);
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 16px;
+  font-size: var(--vt-font-size-sm);
+  font-weight: 500;
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-session-scope:hover {
+  color: var(--vt-text);
+  border-color: var(--vt-border);
+}
+.voice-session-scope:focus-visible {
+  outline: 2px solid var(--vt-accent);
+  outline-offset: 2px;
+}
+
+.voice-coach-runtime-controls {
+  margin-top: var(--vt-gap-sm);
+}
+
+.voice-coach-runtime-controls .voice-btn {
+  padding: 4px 8px;
+  font-size: var(--vt-font-size-xs);
+}
+
+/* Coach thread */
+.voice-coach-thread {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--vt-gap-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--vt-gap-md);
+}
+
+.voice-coach-empty {
+  padding: var(--vt-gap-xl);
+  text-align: center;
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-tertiary);
+}
+
+/* Coach quick actions */
+.voice-coach-quick-actions {
+  display: flex;
+  gap: 6px;
+  padding: var(--vt-gap-sm) var(--vt-gap-lg);
+  flex-wrap: wrap;
+}
+
+/* Coach input */
+.voice-coach-rail .voice-text-control {
+  padding: 0 var(--vt-gap-lg);
+  margin-top: var(--vt-gap-sm);
+}
+
+.voice-coach-rail .voice-text-control span {
+  display: block;
+  font-size: var(--vt-font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vt-text-tertiary);
+  margin-bottom: 4px;
+}
+
+.voice-coach-rail input[type="text"] {
+  width: 100%;
+  /* border-box is load-bearing: no global box-sizing reset exists, so 100% +
+     padding overflowed the label by 17px on narrow viewports. */
+  box-sizing: border-box;
+  padding: 8px 12px;
+  font-size: var(--vt-font-size-sm);
+  font-family: var(--vt-font);
+  color: var(--vt-text);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-sm);
+  transition: all var(--vt-transition);
+}
+
+.voice-coach-rail input[type="text"]:focus {
+  outline: none;
+  border-color: var(--vt-border-focus);
+  box-shadow: 0 0 0 3px var(--vt-accent-dim);
+}
+
+.voice-coach-rail input[type="text"]::placeholder {
+  color: var(--vt-text-tertiary);
+}
+
+.voice-coach-rail .voice-inline-actions {
+  padding: var(--vt-gap-sm) var(--vt-gap-lg);
+}
+
+.voice-coach-rail .voice-reference-help {
+  padding: var(--vt-gap-sm) var(--vt-gap-lg) var(--vt-gap-lg);
+}
+
+/* ── Self Report Panel ───────────────────────────────────────── */
+
+.voice-self-report-panel {
+  padding: var(--vt-gap-md);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+}
+
+/* Post-take reflection placement (declutter 2026-07-19): inside the Review
+   panel the report sheds its box — a quiet ruled section under the takes,
+   the teacher's margin note rather than another card. */
+.voice-review-panel .voice-self-report-panel {
+  padding: var(--vt-gap-md) 0 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--vt-border-subtle);
+  border-radius: 0;
+}
+
+.voice-self-report-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--vt-gap-sm);
+  margin-top: var(--vt-gap-sm);
+}
+
+.voice-self-report-control {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.voice-self-report-control span {
+  font-size: var(--vt-font-size-xs);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--vt-text-secondary);
+}
+
+.voice-self-report-control select {
+  padding: 4px 6px;
+  font-size: var(--vt-font-size-xs);
+  color: var(--vt-text);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-sm);
+  appearance: none;
+  cursor: pointer;
+}
+
+/* ── Script Summary ──────────────────────────────────────────── */
+
+.voice-script-summary {
+  padding: var(--vt-gap-md);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+}
+
+.voice-script-summary p {
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+}
+
+/* ── Script Actions ──────────────────────────────────────────── */
+
+.voice-script-actions {
+  display: flex;
+  gap: var(--vt-gap-sm);
+  flex-wrap: wrap;
+}
+
+/* Quiet line-action overflow (declutter 2026-07-19): Next Line / Easier /
+   Harder stay in the row; the rest fold behind the "⋯ More" disclosure.
+   The tray nests inside #voice-line-actions so the existing show/hide state
+   for line actions governs it too; the global .hidden rule closes it. */
+.voice-line-more-toggle {
+  color: var(--vt-text-secondary);
+}
+
+.voice-line-overflow {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--vt-gap-sm);
+  padding-top: var(--vt-gap-xs);
+}
+
+/* ── Advanced Drawer ─────────────────────────────────────────── */
+
+.voice-advanced-drawer {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--vt-border);
+}
+
+.voice-advanced-content {
+  padding: var(--vt-gap-xl);
+  background: var(--vt-bg-sunken);
+}
+
+.voice-advanced-content.hidden {
+  display: none;
+}
+
+.voice-lab-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--vt-gap-lg);
+}
+
+/* ── Practice Cards (Advanced) ───────────────────────────────── */
+
+.voice-practice-card {
+  padding: var(--vt-gap-lg);
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--vt-gap-md);
+}
+
+.voice-practice-card h3 {
+  font-size: var(--vt-font-size-md);
+  font-weight: 600;
+  color: var(--vt-text);
+}
+
+.voice-practice-card .voice-control,
+.voice-practice-card .voice-text-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.voice-practice-card .voice-control span,
+.voice-practice-card .voice-text-control span {
+  font-size: var(--vt-font-size-xs);
+  font-weight: 500;
+  color: var(--vt-text-tertiary);
+}
+
+.voice-practice-card input[type="text"],
+.voice-practice-card input[type="number"],
+.voice-practice-card textarea {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: var(--vt-font-size-sm);
+  font-family: var(--vt-font);
+  color: var(--vt-text);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-sm);
+  transition: all var(--vt-transition);
+}
+
+.voice-practice-card input:focus,
+.voice-practice-card textarea:focus {
+  outline: none;
+  border-color: var(--vt-border-focus);
+  box-shadow: 0 0 0 3px var(--vt-accent-dim);
+}
+
+.voice-practice-card textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+/* Input diagnostics */
+.voice-input-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--vt-gap-sm);
+}
+
+.voice-input-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--vt-gap-sm);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+}
+
+.voice-input-stat span {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vt-text-tertiary);
+}
+
+.voice-input-stat strong {
+  font-size: var(--vt-font-size-sm);
+  font-weight: 500;
+  color: var(--vt-text-secondary);
+  font-family: var(--vt-font-mono);
+}
+
+/* ── Drill List ──────────────────────────────────────────────── */
+
+.voice-drill-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--vt-gap-sm);
+}
+
+.voice-drill-empty {
+  padding: var(--vt-gap-md);
+  text-align: center;
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-tertiary);
+  background: var(--vt-bg-sunken);
+  border: 1px dashed var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+}
+
+/* ── Upload Button ───────────────────────────────────────────── */
+
+.voice-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  font-size: var(--vt-font-size-sm);
+  font-weight: 500;
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-sm);
+  cursor: pointer;
+  transition: all var(--vt-transition);
+}
+
+.voice-upload-btn:hover {
+  background: var(--vt-bg-card-hover);
+  color: var(--vt-text);
+  border-color: var(--vt-text-tertiary);
+}
+
+/* ── Log ─────────────────────────────────────────────────────── */
+
+.voice-standalone-log {
+  grid-column: 1 / -1;
+  padding: var(--vt-gap-md) var(--vt-gap-xl);
+  background: var(--vt-bg-sunken);
+  border-top: 1px solid var(--vt-border);
+  font-family: var(--vt-font-mono);
+  font-size: var(--vt-font-size-xs);
+  color: var(--vt-text-tertiary);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.voice-standalone-log .voice-log-line {
+  padding: 2px 0;
+  line-height: 1.4;
+}
+
+.voice-standalone-log .voice-log-line[data-level="error"] {
+  color: var(--vt-red);
+}
+
+.voice-standalone-log .voice-log-line[data-level="warn"] {
+  color: var(--vt-yellow);
+}
+
+/* ── Upload Button ───────────────────────────────────────────── */
+
+.voice-upload-btn input[type="file"] {
+  display: none;
+}
+
+/* ── Cue Sheet ───────────────────────────────────────────────── */
+
+.voice-cue-sheet-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: var(--vt-gap-sm);
+}
+
+.voice-cue-sheet-line {
+  padding: var(--vt-gap-md);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+  font-family: var(--vt-font-mono);
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+  line-height: 1.6;
+}
+
+.voice-cue-sheet-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* ── Phrase Feedback ─────────────────────────────────────────── */
+
+.voice-phrase-feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.voice-phrase-empty {
+  padding: var(--vt-gap-md);
+  text-align: center;
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-tertiary);
+  background: var(--vt-bg-sunken);
+  border: 1px dashed var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+}
+
+/* ── Phrase Checkpoints ──────────────────────────────────────── */
+
+.voice-phrase-checkpoints {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+
+/* A portrait display is a vertical instrument even when its CSS width is just
+   over the tablet breakpoint (for example a 1080×1920 wall/remote display). */
+@media (orientation: portrait), (max-width: 1024px) {
+  .voice-tutor-standalone-main {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-cockpit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-cockpit-main {
+    border-right: none;
+    border-bottom: 1px solid var(--vt-border-subtle);
+  }
+
+  .voice-coach-rail {
+    min-height: 400px;
+  }
+
+  .voice-active-results {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-self-report-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .voice-lab-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .voice-cockpit-toolbar {
+    flex-wrap: wrap;
+    gap: var(--vt-gap-sm);
+  }
+
+  .voice-status-strip-cockpit {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .voice-stage-meta {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .voice-input-diagnostics {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===========================================================================
+ * P1 clip trust — front-door report card, mic recording, coach-voice line.
+ * Calm and numberless: exact figures live in title tooltips, not on screen.
+ * ======================================================================== */
+.voice-front-door-record-hint {
+  margin-top: var(--vt-gap-sm);
+  color: var(--vt-text-tertiary);
+  font-size: var(--vt-font-size-xs, 0.78rem);
+}
+
+/* Live recording panel */
+.voice-front-door-recording {
+  max-width: 540px;
+  width: 100%;
+  text-align: center;
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-lg);
+  padding: var(--vt-gap-xl);
+  box-shadow: var(--vt-shadow-lg);
+}
+.voice-front-door-record-guide {
+  color: var(--vt-text-secondary);
+  font-size: var(--vt-font-size-sm);
+  margin: var(--vt-gap-sm) 0 var(--vt-gap-lg);
+}
+.voice-record-meter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--vt-gap-sm);
+  font-variant-numeric: tabular-nums;
+}
+.voice-record-elapsed {
+  font-size: var(--vt-font-size-xl, 1.6rem);
+  color: var(--vt-text);
+  font-weight: 600;
+}
+.voice-record-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--vt-red);
+  animation: voice-record-pulse 1.4s ease-in-out infinite;
+}
+@keyframes voice-record-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+.voice-front-door-record-actions {
+  display: flex;
+  gap: var(--vt-gap-sm);
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: var(--vt-gap-lg);
+}
+.voice-front-door-record-min {
+  margin-top: var(--vt-gap-md);
+  color: var(--vt-text-tertiary);
+  font-size: var(--vt-font-size-xs, 0.78rem);
+}
+
+/* Report card */
+.voice-front-door-report {
+  max-width: 540px;
+  width: 100%;
+}
+.voice-report-card {
+  text-align: left;
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-lg);
+  padding: var(--vt-gap-xl);
+  box-shadow: var(--vt-shadow-lg);
+}
+.voice-report-card-reject {
+  border-color: var(--vt-red-dim);
+}
+.voice-report-clip-name {
+  margin: var(--vt-gap-xs) 0 var(--vt-gap-md);
+  color: var(--vt-text);
+  font-weight: 600;
+  word-break: break-word;
+}
+.voice-report-checks {
+  list-style: none;
+  margin: var(--vt-gap-md) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--vt-gap-sm);
+}
+.voice-report-check {
+  display: flex;
+  align-items: center;
+  gap: var(--vt-gap-sm);
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text);
+}
+.voice-report-check-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4em;
+  height: 1.4em;
+  border-radius: 50%;
+  font-size: 0.85em;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.voice-report-check-pass .voice-report-check-glyph {
+  background: var(--vt-green-dim);
+  color: var(--vt-green);
+}
+.voice-report-check-warn .voice-report-check-glyph {
+  background: var(--vt-yellow-dim);
+  color: var(--vt-yellow);
+}
+.voice-report-check-fail .voice-report-check-glyph {
+  background: var(--vt-red-dim);
+  color: var(--vt-red);
+}
+.voice-report-check-warn .voice-report-check-label,
+.voice-report-check-fail .voice-report-check-label {
+  color: var(--vt-text-secondary);
+}
+.voice-report-summary {
+  margin: var(--vt-gap-md) 0;
+  color: var(--vt-text-secondary);
+  font-size: var(--vt-font-size-sm);
+  line-height: 1.5;
+}
+.voice-report-coach-voice {
+  margin: var(--vt-gap-md) 0 0;
+  padding: var(--vt-gap-sm) var(--vt-gap-md);
+  border-radius: var(--vt-radius-md);
+  font-size: var(--vt-font-size-sm);
+}
+.voice-report-coach-voice.is-cloned {
+  background: var(--vt-accent-dim);
+  color: var(--vt-text);
+}
+.voice-report-coach-voice.is-default {
+  background: var(--vt-yellow-dim);
+  color: var(--vt-text-secondary);
+}
+.voice-report-actions {
+  display: flex;
+  gap: var(--vt-gap-sm);
+  flex-wrap: wrap;
+  margin-top: var(--vt-gap-lg);
+}
+
+/* P2 (memory/continuity): welcome-back card — shown in place of the front door
+   for a known returning learner. Mirrors the front-door card's calm, centered
+   language; ONE primary next action ("Continue practice"). */
+.voice-welcome-back {
+  grid-column: 1 / -1;
+  display: grid;
+  place-items: center;
+  min-height: calc(100vh - 160px);
+  padding: var(--vt-gap-xl) var(--vt-gap-lg);
+}
+.voice-welcome-back-card {
+  max-width: 540px;
+  text-align: center;
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-lg);
+  padding: var(--vt-gap-xl);
+  box-shadow: var(--vt-shadow-lg);
+}
+.voice-welcome-back-card h3 {
+  margin: var(--vt-gap-sm) 0;
+  color: var(--vt-text);
+}
+.voice-welcome-back-target {
+  color: var(--vt-text);
+  font-size: var(--vt-font-size-sm);
+  margin: var(--vt-gap-sm) 0 0;
+}
+.voice-welcome-back-stat {
+  color: var(--vt-text-secondary);
+  font-size: var(--vt-font-size-sm);
+  margin: var(--vt-gap-xs) 0 0;
+}
+.voice-welcome-back-actions {
+  display: flex;
+  gap: var(--vt-gap-sm);
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: var(--vt-gap-lg);
+}
+.voice-welcome-back-fallback {
+  margin-top: var(--vt-gap-md);
+  background: none;
+  border: none;
+  color: var(--vt-text-tertiary);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: var(--vt-font-size-sm);
+}
+.voice-welcome-back-fallback:hover {
+  color: var(--vt-text-secondary);
+}
+.voice-welcome-back-note {
+  margin-top: var(--vt-gap-md);
+  color: var(--vt-text-secondary);
+  font-size: var(--vt-font-size-sm);
+}
+
+/* ============================================================================
+   Lesson surface (Wave B) — coach-presence practice layer.
+   Appended; uses the existing design tokens. Calm, low-stimulus per the design
+   principles. Karaoke "missed" is a soft amber-red, never harsh.
+   ============================================================================ */
+
+/* --- Focus banner: one always-visible focus for today --------------------- */
+.voice-lesson-focus-banner {
+  display: flex;
+  align-items: baseline;
+  gap: var(--vt-gap-md);
+  margin: var(--vt-gap-md) 0 0;
+  padding: var(--vt-gap-md) var(--vt-gap-lg);
+  background: var(--vt-bg-raised);
+  border: 1px solid var(--vt-border-subtle);
+  border-left: 3px solid var(--vt-accent);
+  border-radius: var(--vt-radius-md);
+  transition: border-color var(--vt-transition);
+}
+.voice-lesson-focus-banner[data-axis="resonance"] { border-left-color: var(--vt-yellow); }
+.voice-lesson-focus-banner[data-axis="weight"] { border-left-color: var(--vt-green); }
+.voice-lesson-focus-banner[data-axis="prosody"] { border-left-color: var(--vt-lesson-prosody); }
+.voice-lesson-focus-banner.voice-lesson-focus-placeholder { border-left-color: var(--vt-border); }
+.voice-lesson-focus-eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--vt-text-tertiary);
+}
+.voice-lesson-focus-text {
+  flex: 1;
+  font-size: var(--vt-font-size-lg);
+  font-weight: 600;
+  color: var(--vt-text);
+  line-height: 1.4;
+}
+.voice-lesson-focus-placeholder .voice-lesson-focus-text {
+  font-weight: 500;
+  color: var(--vt-text-secondary);
+}
+.voice-lesson-focus-axis {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--vt-text-inverse);
+  background: var(--vt-accent);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.voice-lesson-focus-axis[data-axis="resonance"] { background: var(--vt-yellow); }
+.voice-lesson-focus-axis[data-axis="weight"] { background: var(--vt-green); }
+.voice-lesson-focus-axis[data-axis="prosody"] { background: var(--vt-lesson-prosody); }
+
+/* --- Practice card "paper strip" ------------------------------------------ */
+.voice-lesson-card {
+  margin-top: var(--vt-gap-md);
+  padding: var(--vt-gap-lg) var(--vt-gap-xl);
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-lg);
+  box-shadow: var(--vt-shadow-sm);
+  transition: box-shadow var(--vt-transition), border-color var(--vt-transition);
+}
+.voice-lesson-card-strip {
+  font-size: var(--vt-font-size-2xl);
+  line-height: 1.6;
+  color: var(--vt-text);
+  word-spacing: 0.04em;
+}
+.voice-lesson-card-empty {
+  font-size: var(--vt-font-size-lg);
+  font-weight: 500;
+  color: var(--vt-text-secondary);
+}
+
+/* Emphasis levels 0-3 -> size + weight + focus-colored underline weight.
+   The accent color comes from --vt-lesson-tok-accent (set per token by JS). */
+.voice-lesson-tok {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 2px;
+  transition: color var(--vt-transition), text-shadow var(--vt-transition);
+  border-bottom: 2px solid transparent;
+}
+.voice-lesson-emph-0 { font-weight: 400; font-size: 0.86em; }
+.voice-lesson-emph-1 { font-weight: 500; font-size: 1em; }
+.voice-lesson-emph-2 {
+  font-weight: 650;
+  font-size: 1.08em;
+  border-bottom-color: color-mix(in srgb, var(--vt-lesson-tok-accent, var(--vt-accent)) 45%, transparent);
+}
+.voice-lesson-emph-3 {
+  font-weight: 800;
+  font-size: 1.18em;
+  border-bottom-color: var(--vt-lesson-tok-accent, var(--vt-accent));
+}
+
+/* Word marks (applied after a take — the teacher's pencil, not a scoreboard).
+   Held = the word settles into full ink with a steady underline: achieved
+   means *settled*, not celebrated. Slipped = graphite with a dotted pencil
+   underline — a note to return to, never an alarm. No glows, no traffic
+   lights (see docs/PRACTICE-PHILOSOPHY.md). */
+.voice-lesson-tok-pending { color: var(--vt-text-secondary); }
+.voice-lesson-tok-seen { color: var(--vt-text); }
+.voice-lesson-tok-hit {
+  color: var(--vt-text);
+}
+.voice-lesson-tok-hit::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--vt-lesson-tok-accent, var(--vt-accent));
+  opacity: 0.55;
+}
+.voice-lesson-tok-missed {
+  /* graphite, never red */
+  color: var(--vt-text-secondary);
+}
+.voice-lesson-tok-missed::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: repeating-linear-gradient(90deg,
+    var(--vt-text-secondary) 0, var(--vt-text-secondary) 3px,
+    transparent 3px, transparent 6px);
+  opacity: 0.45;
+}
+/* The coach's referenced moment, flagged on a token. */
+.voice-lesson-tok-moment {
+  background: var(--vt-accent-glow);
+  border-radius: var(--vt-radius-sm);
+  box-shadow: 0 0 0 2px var(--vt-accent-dim);
+}
+/* The token currently sounding during replay. */
+.voice-lesson-tok-active {
+  color: var(--vt-accent);
+  text-shadow: 0 0 12px var(--vt-accent-dim);
+}
+
+/* "Coach adjusted this card" pulse — quiet, so it feels attended not glitchy. */
+@keyframes voiceLessonCardPulse {
+  0% { box-shadow: var(--vt-shadow-sm); border-color: var(--vt-border-subtle); }
+  35% {
+    box-shadow: 0 0 0 3px var(--vt-accent-dim), var(--vt-shadow-md);
+    border-color: var(--vt-border-focus);
+  }
+  100% { box-shadow: var(--vt-shadow-sm); border-color: var(--vt-border-subtle); }
+}
+.voice-lesson-card-pulse { animation: voiceLessonCardPulse 1.2s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .voice-lesson-card-pulse { animation: none; }
+}
+
+/* Keymap hint line in the practice stage footer. */
+.voice-lesson-keymap-hint {
+  margin: var(--vt-gap-md) 0 0;
+  font-size: var(--vt-font-size-xs);
+  color: var(--vt-text-tertiary);
+  letter-spacing: 0.01em;
+}
+.voice-lesson-keymap-hint kbd {
+  font-family: var(--vt-font-mono);
+  font-size: 10px;
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  padding: 1px 5px;
+  margin: 0 1px;
+}
+
+/* --- Voice compass restyle: quadrant hints + soft target region ----------- */
+.voice-lesson-quadrant {
+  position: absolute;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--vt-text-tertiary);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 5;
+}
+.voice-lesson-quadrant-top { top: 8px; left: 50%; transform: translateX(-50%); }
+.voice-lesson-quadrant-bottom { bottom: 30px; left: 50%; transform: translateX(-50%); }
+.voice-lesson-quadrant-left { left: 30px; top: 50%; transform: translateY(-50%); }
+.voice-lesson-quadrant-right { right: 8px; top: 50%; transform: translateY(-50%); }
+
+/* The soft target region, child of .voice-graph-grid so its %-coords match the
+   live dot exactly (same getVoiceGraphPoint transform). */
+.voice-lesson-target-region {
+  position: absolute;
+  background: color-mix(in srgb, var(--vt-accent) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--vt-accent) 38%, transparent);
+  border-radius: var(--vt-radius-md);
+  pointer-events: none;
+  z-index: 2;
+  transition: left 200ms ease, top 200ms ease, width 200ms ease, height 200ms ease;
+}
+.voice-lesson-target-region.hidden { display: none; }
+
+/* --- Quick intents (Help / Break it down / Listen back) ------------------- */
+.voice-lesson-intents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--vt-gap-sm);
+  margin-top: var(--vt-gap-sm);
+}
+.voice-lesson-intent {
+  font-size: var(--vt-font-size-sm);
+  font-weight: 600;
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-lesson-intent:hover {
+  color: var(--vt-text);
+  background: var(--vt-bg-card-hover);
+  border-color: var(--vt-border);
+}
+.voice-lesson-intent:focus-visible {
+  outline: 2px solid var(--vt-border-focus);
+  outline-offset: 1px;
+}
+
+/* The coach-invoked replay affordance: a gentle pulsing offer on the dock. */
+.voice-lesson-replay-offer {
+  font-size: var(--vt-font-size-sm);
+  font-weight: 700;
+  color: var(--vt-text-inverse);
+  background: var(--vt-accent);
+  border: none;
+  border-radius: var(--vt-radius-md);
+  padding: 6px 12px;
+  cursor: pointer;
+  animation: voiceLessonOfferPulse 2.4s ease-in-out infinite;
+}
+.voice-lesson-replay-offer.hidden { display: none; }
+@keyframes voiceLessonOfferPulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--vt-accent-dim); }
+  50% { box-shadow: 0 0 0 5px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-lesson-replay-offer { animation: none; }
+}
+
+/* --- Replay overlay "listen back together" -------------------------------- */
+.voice-lesson-replay-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vt-bg-overlay);
+  backdrop-filter: blur(2px);
+  padding: var(--vt-gap-xl);
+}
+.voice-lesson-replay-overlay.hidden { display: none; }
+.voice-lesson-replay-dialog {
+  width: min(560px, 100%);
+  background: var(--vt-bg-raised);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-xl);
+  box-shadow: var(--vt-shadow-lg);
+  padding: var(--vt-gap-xl);
+}
+.voice-lesson-replay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--vt-gap-md);
+}
+.voice-lesson-replay-close {
+  font-size: var(--vt-font-size-lg);
+  color: var(--vt-text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: var(--vt-radius-sm);
+}
+.voice-lesson-replay-close:hover { color: var(--vt-text); background: var(--vt-bg-card-hover); }
+.voice-lesson-replay-status {
+  font-size: var(--vt-font-size-md);
+  color: var(--vt-text-secondary);
+  margin: 0 0 var(--vt-gap-md);
+}
+.voice-lesson-replay-card-strip {
+  font-size: var(--vt-font-size-xl);
+  line-height: 1.6;
+  margin-bottom: var(--vt-gap-lg);
+}
+.voice-lesson-replay-compass {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: 320px;
+  background: var(--vt-graph-bg);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-lg);
+  overflow: hidden;
+}
+.voice-lesson-replay-trail { position: absolute; inset: 0; width: 100%; height: 100%; }
+.voice-lesson-replay-trail.hidden { display: none; }
+.voice-lesson-replay-trail polyline,
+#voice-lesson-replay-trail-line {
+  fill: none;
+  stroke: var(--vt-graph-live);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+.voice-lesson-replay-dot.hidden { display: none; }
+/* The compass pulses when playback passes the coach's referenced moment. */
+@keyframes voiceLessonReplayMoment {
+  0% { box-shadow: 0 0 0 0 var(--vt-accent); }
+  100% { box-shadow: 0 0 0 18px transparent; }
+}
+.voice-lesson-replay-moment { animation: voiceLessonReplayMoment 0.9s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .voice-lesson-replay-moment { animation: none; }
+}
+
+/* ===========================================================================
+   v1.5 surfaces — one-real-sentence slot, time-lapse mirror, strain-guardian
+   hint, pin affordance, debrief follow-up. Ink palette only: no green/red as
+   alarm, nothing glows, nothing celebrates (docs/PRACTICE-PHILOSOPHY.md). The
+   accent (--vt-accent, a muted sage) is the only warm note, used calmly.
+   =========================================================================== */
+
+/* --- One real sentence a day: the slim slot near the focus banner ---------- */
+.voice-lesson-sentence-slot {
+  margin: var(--vt-gap-sm) 0 var(--vt-gap-md);
+  padding: var(--vt-gap-sm) var(--vt-gap-md);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+}
+.voice-lesson-sentence-line {
+  margin: 0;
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+  line-height: 1.5;
+}
+.voice-lesson-sentence-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vt-gap-md);
+  flex-wrap: wrap;
+}
+.voice-lesson-sentence-choose,
+.voice-lesson-sentence-pick,
+.voice-lesson-sentence-cancel {
+  font-size: var(--vt-font-size-sm);
+  font-weight: 600;
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+  white-space: nowrap;
+}
+.voice-lesson-sentence-choose:hover,
+.voice-lesson-sentence-pick:hover,
+.voice-lesson-sentence-cancel:hover {
+  color: var(--vt-text);
+  border-color: var(--vt-border);
+  background: var(--vt-bg-card-hover);
+}
+.voice-lesson-sentence-choose:focus-visible,
+.voice-lesson-sentence-pick:focus-visible,
+.voice-lesson-sentence-cancel:focus-visible,
+.voice-lesson-sentence-suggestion:focus-visible,
+.voice-lesson-sentence-input:focus-visible {
+  outline: 2px solid var(--vt-border-focus);
+  outline-offset: 1px;
+}
+.voice-lesson-sentence-chooser {
+  display: flex;
+  flex-direction: column;
+  gap: var(--vt-gap-sm);
+}
+.voice-lesson-sentence-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.voice-lesson-sentence-suggestion {
+  text-align: left;
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text);
+  background: transparent;
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-lesson-sentence-suggestion:hover {
+  border-color: var(--vt-border-focus);
+  background: var(--vt-accent-dim);
+}
+.voice-lesson-sentence-input {
+  font-family: var(--vt-font);
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  padding: 7px 10px;
+}
+.voice-lesson-sentence-chooser-actions {
+  display: flex;
+  gap: var(--vt-gap-sm);
+}
+.voice-lesson-sentence-eyebrow {
+  display: block;
+  font-size: var(--vt-font-size-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--vt-text-tertiary);
+  margin-bottom: 2px;
+}
+.voice-lesson-sentence-text-picked {
+  margin: 0;
+  font-size: var(--vt-font-size-md, 14px);
+  color: var(--vt-text);
+  line-height: 1.45;
+}
+.voice-lesson-sentence-status {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: var(--vt-font-size-xs);
+  color: var(--vt-text-tertiary);
+  font-style: italic;
+}
+.voice-lesson-sentence-slot .hidden,
+.voice-lesson-sentence-status.hidden { display: none; }
+
+/* --- Strain-guardian quiet hint + calm end-session emphasis ---------------- */
+/* A small muted line — NOT an alarm. The coach already said the full template
+   line in-thread; this is only the visual cue. */
+.voice-lesson-guardian-hint {
+  margin: var(--vt-gap-sm) 0 0;
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-tertiary);
+  font-style: italic;
+  line-height: 1.5;
+}
+.voice-lesson-guardian-hint.hidden { display: none; }
+/* 'close' calmly emphasizes the EXISTING Finish control — a settled accent
+   ring, never red, never locked. */
+.voice-lesson-end-emphasis {
+  border-color: var(--vt-border-focus) !important;
+  box-shadow: 0 0 0 2px var(--vt-accent-dim);
+  color: var(--vt-text) !important;
+}
+
+/* --- Pin affordance on the take result area -------------------------------- */
+.voice-lesson-pin-offer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vt-gap-md);
+  margin-top: var(--vt-gap-md);
+  padding: var(--vt-gap-sm) var(--vt-gap-md);
+  background: var(--vt-accent-dim);
+  border: 1px solid color-mix(in srgb, var(--vt-accent) 30%, transparent);
+  border-radius: var(--vt-radius-md);
+}
+.voice-lesson-pin-offer.hidden { display: none; }
+.voice-lesson-pin-offer-text {
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+}
+.voice-lesson-pin-offer-button {
+  font-size: var(--vt-font-size-sm);
+  font-weight: 600;
+  color: var(--vt-text);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+  white-space: nowrap;
+}
+.voice-lesson-pin-offer-button:hover {
+  border-color: var(--vt-border-focus);
+  background: var(--vt-bg-card-hover);
+}
+.voice-lesson-pin-offer-button.hidden { display: none; }
+.voice-lesson-pin-offer-button:focus-visible,
+.voice-lesson-mirror-link:focus-visible,
+.voice-lesson-mirror-play:focus-visible,
+.voice-lesson-mirror-close:focus-visible,
+.voice-lesson-mirror-row-pick:focus-visible,
+.voice-lesson-mirror-row-unpin:focus-visible,
+.voice-lesson-debrief-button:focus-visible,
+.voice-lesson-debrief-dismiss:focus-visible,
+.voice-lesson-debrief-note:focus-visible {
+  outline: 2px solid var(--vt-border-focus);
+  outline-offset: 1px;
+}
+
+/* --- One-real-sentence debrief follow-up (under the coach thread) ----------- */
+.voice-lesson-debrief {
+  margin: var(--vt-gap-sm) 0;
+  padding: var(--vt-gap-sm) var(--vt-gap-md);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+}
+.voice-lesson-debrief.hidden { display: none; }
+.voice-lesson-debrief-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--vt-gap-sm);
+}
+.voice-lesson-debrief-prompt {
+  margin: 0;
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text);
+  line-height: 1.5;
+}
+.voice-lesson-debrief-dismiss {
+  flex: none;
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-tertiary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.voice-lesson-debrief-dismiss:hover { color: var(--vt-text-secondary); }
+.voice-lesson-debrief-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--vt-gap-sm);
+  margin-top: var(--vt-gap-sm);
+}
+.voice-lesson-debrief-button {
+  font-size: var(--vt-font-size-sm);
+  font-weight: 600;
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-lesson-debrief-button:hover:not(:disabled) {
+  color: var(--vt-text);
+  border-color: var(--vt-border-focus);
+  background: var(--vt-bg-card-hover);
+}
+.voice-lesson-debrief-button:disabled { opacity: 0.5; cursor: default; }
+.voice-lesson-debrief-note {
+  width: 100%;
+  margin-top: var(--vt-gap-sm);
+  font-family: var(--vt-font);
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  padding: 7px 10px;
+  box-sizing: border-box;
+}
+
+/* --- The time-lapse mirror: entry link + takeover panel -------------------- */
+.voice-lesson-mirror-link {
+  font-size: var(--vt-font-size-xs);
+  font-weight: 600;
+  color: var(--vt-text-tertiary);
+  background: transparent;
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  padding: 3px 9px;
+  margin-left: auto;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-lesson-mirror-link:hover {
+  color: var(--vt-text);
+  border-color: var(--vt-border-focus);
+}
+.voice-lesson-mirror-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--vt-gap-xl);
+  background: var(--vt-bg-overlay);
+  backdrop-filter: blur(2px);
+}
+.voice-lesson-mirror-overlay.hidden { display: none; }
+.voice-lesson-mirror-dialog {
+  width: min(520px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--vt-bg-card);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-lg);
+  box-shadow: var(--vt-shadow-lg);
+  padding: var(--vt-gap-lg);
+}
+.voice-lesson-mirror-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--vt-gap-sm);
+}
+.voice-lesson-mirror-close {
+  font-size: var(--vt-font-size-md, 14px);
+  color: var(--vt-text-tertiary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  line-height: 1;
+}
+.voice-lesson-mirror-close:hover { color: var(--vt-text-secondary); }
+.voice-lesson-mirror-honest {
+  margin: 0 0 var(--vt-gap-md);
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+  font-style: italic;
+  line-height: 1.5;
+}
+.voice-lesson-mirror-empty {
+  margin: var(--vt-gap-lg) 0;
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-tertiary);
+  line-height: 1.5;
+  text-align: center;
+}
+.voice-lesson-mirror-empty.hidden,
+.voice-lesson-mirror-list.hidden,
+.voice-lesson-mirror-then-now:empty { display: none; }
+.voice-lesson-mirror-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--vt-gap-md);
+  /* A simple time axis: a hairline rail down the left edge. */
+  border-left: 2px solid var(--vt-border-subtle);
+  padding-left: var(--vt-gap-md);
+}
+.voice-lesson-mirror-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vt-gap-sm);
+  padding: 4px 0;
+}
+.voice-lesson-mirror-row-pick {
+  flex: 1;
+  text-align: left;
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--vt-radius-sm);
+  padding: 5px 8px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-lesson-mirror-row-pick:hover {
+  color: var(--vt-text);
+  border-color: var(--vt-border-subtle);
+}
+/* The selected then/now pair — calm accent labels, not a scoreboard. */
+.voice-lesson-mirror-row-then .voice-lesson-mirror-row-pick {
+  color: var(--vt-text);
+  border-color: var(--vt-border-subtle);
+  background: var(--vt-bg-sunken);
+}
+.voice-lesson-mirror-row-then .voice-lesson-mirror-row-pick::before { content: 'then · '; color: var(--vt-text-tertiary); }
+.voice-lesson-mirror-row-now .voice-lesson-mirror-row-pick {
+  color: var(--vt-text);
+  border-color: var(--vt-border-focus);
+  background: var(--vt-accent-dim);
+}
+.voice-lesson-mirror-row-now .voice-lesson-mirror-row-pick::before { content: 'now · '; color: var(--vt-accent); }
+.voice-lesson-mirror-row-unpin {
+  flex: none;
+  font-size: var(--vt-font-size-xs);
+  color: var(--vt-text-tertiary);
+  background: transparent;
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-lesson-mirror-row-unpin:hover {
+  color: var(--vt-text-secondary);
+  border-color: var(--vt-border);
+}
+.voice-lesson-mirror-then-now {
+  margin: 0 0 var(--vt-gap-sm);
+  font-size: var(--vt-font-size-sm);
+  font-weight: 600;
+  color: var(--vt-text);
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+.voice-lesson-mirror-compass {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-width: 260px;
+  margin: 0 auto var(--vt-gap-sm);
+  background: var(--vt-graph-bg);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+  overflow: hidden;
+}
+.voice-lesson-mirror-compass .voice-lesson-replay-trail { position: absolute; inset: 0; width: 100%; height: 100%; }
+.voice-lesson-mirror-compass .voice-lesson-replay-trail.hidden { display: none; }
+/* The "now" trail uses the standard accent; the "then" trail is muted graphite.
+   Sequential, never simultaneous — set by the replay controller's trailVariant. */
+.voice-lesson-replay-trail-now polyline,
+#voice-lesson-mirror-trail.voice-lesson-replay-trail-now polyline {
+  fill: none;
+  stroke: var(--vt-accent);
+  stroke-width: 1.5;
+  opacity: 0.85;
+}
+.voice-lesson-replay-trail-then polyline,
+#voice-lesson-mirror-trail.voice-lesson-replay-trail-then polyline {
+  fill: none;
+  stroke: var(--vt-text-tertiary);
+  stroke-width: 1.5;
+  opacity: 0.55;
+}
+.voice-lesson-mirror-replay-status,
+.voice-lesson-mirror-status {
+  font-size: var(--vt-font-size-xs);
+  color: var(--vt-text-tertiary);
+}
+.voice-lesson-mirror-replay-status {
+  display: block;
+  text-align: center;
+  margin: 0 0 var(--vt-gap-sm);
+  min-height: 1em;
+}
+.voice-lesson-mirror-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--vt-gap-md);
+  justify-content: center;
+}
+.voice-lesson-mirror-play {
+  font-size: var(--vt-font-size-sm);
+  font-weight: 600;
+  color: var(--vt-text);
+  background: var(--vt-bg-input);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-md);
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-lesson-mirror-play:hover:not(:disabled) {
+  border-color: var(--vt-border-focus);
+  background: var(--vt-bg-card-hover);
+}
+.voice-lesson-mirror-play:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Surfacing wave (B3) ─────────────────────────────────────── */
+
+/* Review panel: due-for-review line — a quiet pencil note, never pressure. */
+.voice-review-due {
+  font-size: var(--vt-font-size-sm);
+  color: var(--vt-text-secondary);
+}
+
+/* Review rows: quiet per-take Listen (same tone as the mirror link). */
+.voice-review-row-listen {
+  font-size: var(--vt-font-size-xs);
+  font-weight: 600;
+  color: var(--vt-text-tertiary);
+  background: transparent;
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  padding: 3px 9px;
+  margin-left: auto;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-review-row-listen:hover:not(:disabled) {
+  color: var(--vt-text);
+  border-color: var(--vt-border-focus);
+}
+.voice-review-row-listen:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Sound-spelling toggle: sits beside the script-pad label, whisper-quiet. */
+.voice-sound-spelling-toggle {
+  font-size: var(--vt-font-size-xs);
+  font-weight: 600;
+  color: var(--vt-text-tertiary);
+  background: transparent;
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  padding: 2px 8px;
+  margin-left: var(--vt-gap-sm);
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-sound-spelling-toggle:hover {
+  color: var(--vt-text);
+  border-color: var(--vt-border-focus);
+}
+
+/* Sound-spelling OFF: hide the cue-TEXT layer only (respelled lines and
+   per-word cue respellings). The toggle itself and the coaching notes stay. */
+.voice-lab-panel.tv-sound-spelling-off #voice-active-line-performance,
+.voice-lab-panel.tv-sound-spelling-off .voice-cue-token-cue,
+.voice-lab-panel.tv-sound-spelling-off .voice-cue-sheet-styled {
+  display: none;
+}
+
+/* Hear-this-line: a quiet offer beside the active line. */
+.voice-hear-line {
+  align-self: flex-start;
+  font-size: var(--vt-font-size-xs);
+  font-weight: 600;
+  color: var(--vt-text-tertiary);
+  background: transparent;
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  padding: 3px 9px;
+  margin-top: 4px;
+  cursor: pointer;
+  transition: var(--vt-transition);
+}
+.voice-hear-line:hover:not(:disabled) {
+  color: var(--vt-text);
+  border-color: var(--vt-border-focus);
+}
+.voice-hear-line:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Honesty notes in the coach rail: factual, muted, no alarm color. */
+.voice-coach-honesty-note {
+  font-size: var(--vt-font-size-xs);
+  color: var(--vt-text-secondary);
+  background: var(--vt-bg-sunken);
+  border: 1px solid var(--vt-border-subtle);
+  border-radius: var(--vt-radius-sm);
+  padding: 4px 10px;
+  margin: var(--vt-gap-sm) 0 0;
+}
+
+/* Consumer-hardware wave: first-run mic check. A calm fixed overlay (the same
+   quiet-dialog pattern as the replay/mirror surfaces) so it can appear over the
+   front door on first run AND over the practice stage from the advanced drawer
+   without fighting the render loop's front-door visibility rule. Verdicts are
+   ink (no red, no scores); the meter is a thin, calm progress line. */
+.voice-mic-check {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vt-bg-overlay);
+  backdrop-filter: blur(2px);
+  padding: var(--vt-gap-xl);
+}
+.voice-mic-check.hidden { display: none; }
+.voice-mic-check-card {
+  width: min(540px, 100%);
+  text-align: center;
+  background: var(--vt-bg-raised);
+  border: 1px solid var(--vt-border);
+  border-radius: var(--vt-radius-xl);
+  padding: var(--vt-gap-xl);
+  box-shadow: var(--vt-shadow-lg);
+}
+.voice-mic-check-card h3 {
+  margin: var(--vt-gap-sm) 0;
+  color: var(--vt-text);
+}
+.voice-mic-check-card p {
+  color: var(--vt-text-secondary);
+  font-size: var(--vt-font-size-sm);
+}
+.voice-mic-check-line {
+  font-size: var(--vt-font-size-md);
+  color: var(--vt-text);
+  font-style: italic;
+  margin: var(--vt-gap-md) 0;
+}
+.voice-mic-check-meter {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--vt-bg-sunken);
+  overflow: hidden;
+  margin: var(--vt-gap-lg) auto var(--vt-gap-md);
+  max-width: 320px;
+}
+.voice-mic-check-progress {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--vt-accent);
+  opacity: 0.7;
+  border-radius: inherit;
+  transition: width 160ms linear;
+}
+.voice-mic-check-verdict {
+  color: var(--vt-text);
+  font-size: var(--vt-font-size-md);
+  line-height: 1.5;
+  margin: var(--vt-gap-md) 0 0;
+}
+
+/* ── Saved-voice picker (front door · UX pass 2026-07-19) ──
+   Tappable cards, one per saved voice — modern, quiet, big targets. */
+.voice-front-door-preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 6px 0 4px;
+}
+.voice-preset-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  min-height: 60px;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  text-align: left;
+  background: var(--vt-surface-soft);
+  border: 1px solid var(--vt-border);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.voice-preset-pick:hover,
+.voice-preset-pick:focus-visible {
+  border-color: var(--vt-accent);
+}
+.voice-preset-pick:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.voice-preset-pick-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--vt-text);
+}

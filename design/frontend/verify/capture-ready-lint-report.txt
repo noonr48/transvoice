@@ -1,0 +1,47 @@
+design-lint report
+==================
+
+### LINT7 [WARN] — Spacing prop with raw px/rem/em literal outside token sheets (14)
+  frontend/voice-tutor-app.html:83  padding: 0 16px;
+  frontend/voice-tutor-app.html:105  top: 54px;
+  frontend/voice-tutor-app.html:111  padding: 10px;
+  frontend/voice-tutor-app.html:117  #tv-coach-preset-list { display: grid; gap: 5px; }
+  frontend/voice-tutor-app.html:121  padding: 10px 12px;
+  frontend/voice-tutor-app.html:131  #tv-coach-upload-open { margin-top: 7px; border-top: 1px solid var(--coach-bord…
+  frontend/voice-tutor-app.html:132  .tv-coach-preset-empty { margin: 8px 10px; color: var(--coach-muted); font-size…
+  frontend/voice-tutor-app.html:133  #tv-coach-upload-form { display: grid; gap: 10px; padding: 6px 2px 2px; }
+  frontend/voice-tutor-app.html:133  #tv-coach-upload-form { display: grid; gap: 10px; padding: 6px 2px 2px; }
+  frontend/voice-tutor-app.html:134  #tv-coach-upload-form label { display: grid; gap: 6px; color: var(--coach-muted…
+  frontend/voice-tutor-app.html:138  padding: 9px 11px;
+  frontend/voice-tutor-app.html:144  .tv-coach-upload-actions { display: grid; grid-template-columns: 1fr 1fr; gap: …
+  frontend/voice-tutor-app.html:248  margin-right: 8px;
+  frontend/voice-tutor-app.html:270  padding: 12px 24px;
+
+### LINT8 [WARN] — border-radius raw length literal outside token sheets (4)
+  frontend/voice-tutor-app.html:88  border-radius: 999px;
+  frontend/voice-tutor-app.html:124  border-radius: 12px;
+  frontend/voice-tutor-app.html:140  border-radius: 11px;
+  frontend/voice-tutor-app.html:272  border-radius: 999px;
+
+### LINT9 [WARN] — font-size raw literal outside token sheets (6)
+  frontend/voice-tutor-app.html:132  .tv-coach-preset-empty { margin: 8px 10px; color: var(--coach-muted); font-size…
+  frontend/voice-tutor-app.html:134  #tv-coach-upload-form label { display: grid; gap: 6px; color: var(--coach-muted…
+  frontend/voice-tutor-app.html:229  font-size: 13px;
+  frontend/voice-tutor-app.html:240  font-size: 14px;
+  frontend/voice-tutor-app.html:258  font-size: 14px;
+  frontend/voice-tutor-app.html:275  font-size: 18px;
+
+### LINT22 [WARN] — Status-dot heuristic (bare round glyph as live/online indicator) (1)
+  frontend/voice-tutor-app.html:243  #tv-coach-surface[data-activity="ready"] #tv-coach-status::before {
+
+Hue census: 0 saturated families (budget 4) → (none)
+
+Summary
+rule    | severity | count
+--------|----------|------
+LINT7   | warn     | 14
+LINT8   | warn     | 4
+LINT9   | warn     | 6
+LINT22  | warn     | 1
+
+Total findings: 25 (0 error-severity)
