@@ -14,6 +14,7 @@ const {
 const { normalizeBeginnerMasteryState } = require('./beginner-mastery');
 const { applyProductPolicyToBridge } = require('./product-policy-bridge');
 const { resolveFemV1RuntimeTurn } = require('./fem-v1-runtime-turn');
+const { resolvePitchAlphaCueForShadow } = require('./cue-alpha-authority');
 
 const TARGET_METRIC_RUNTIME_SCHEMA = 'transvoice.target_metric_runtime.v2';
 
@@ -63,8 +64,9 @@ function finalizedAttemptFromVoiceState(voiceState, captureEvidence, observation
   const artifact = voiceState?.lastAttemptArtifact;
   if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) return null;
   const rawId = artifact.attemptArtifactId || artifact.artifactId || artifact.id || null;
-  const attemptArtifactId = typeof rawId === 'string' && rawId.trim() ? rawId.trim().slice(0, 160) : null;
+  const attemptArtifactId = typeof rawId === 'string' && rawId.trim() ? rawId.trim() : null;
   if (!attemptArtifactId) return null;
+  if (attemptArtifactId.length > 160) throw new Error('attempt_artifact_id_too_long');
   const eligible = captureEvidence.usable === true;
   return {
     attemptArtifactId,
@@ -86,7 +88,10 @@ function resolveFemV1ShadowRuntime({ voiceState, signal, bridge, stage, motorMap
   const observations = Array.isArray(bridge?.observations) ? bridge.observations : [];
   const captureEvidence = captureEvidenceFromSignal(signal);
   const selfReport = voiceState?.lastAttemptArtifact?.selfReport || voiceState?.selfReport || {};
-  const finalizedAttempt = finalizedAttemptFromVoiceState(voiceState, captureEvidence, observations);
+  const explicitEvent = voiceState?.lastAttemptFinalizedEvent || null;
+  const finalizedAttempt = explicitEvent
+    ? null
+    : finalizedAttemptFromVoiceState(voiceState, captureEvidence, observations);
   return resolveFemV1RuntimeTurn({
     mode: 'shadow',
     learnerState: {
@@ -100,10 +105,13 @@ function resolveFemV1ShadowRuntime({ voiceState, signal, bridge, stage, motorMap
       sessionId: voiceState?.sessionId || null,
       stage,
       pendingTrial: voiceState?.pendingTrial || null,
-      attemptSequence: voiceState?.attemptSequence || null,
+      revision: Number.isInteger(voiceState?.femV1Revision) ? voiceState.femV1Revision : null,
+      attemptSequence: voiceState?.attemptSequence || voiceState?.attempSequence || null,
     },
+    finalizedAttemptEvent: explicitEvent,
     finalizedAttempt,
-    turnEvidence: { selfReport, captureEvidence, observations },
+    turnEvidence: explicitEvent ? null : { selfReport, captureEvidence, observations },
+    cueResolver: resolvePitchAlphaCueForShadow,
   });
 }
 
