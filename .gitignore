@@ -9,3 +9,4 @@ dist/
 !backend/tests/fixtures/*.wav
 app-state/
 .DS_Store
+.sloane/
