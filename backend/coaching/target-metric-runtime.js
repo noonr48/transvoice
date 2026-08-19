@@ -14,6 +14,7 @@ const {
 const { normalizeBeginnerMasteryState } = require('./beginner-mastery');
 const { applyProductPolicyToBridge } = require('./product-policy-bridge');
 const { resolvePitchAlphaCueForShadow } = require('./cue-alpha-authority');
+const { resolveFemV1RuntimeTurn } = require('./fem-v1-runtime-turn');
 const { resolveFemV1ShadowSessionTurn } = require('./fem-v1-shadow-state');
 
 const TARGET_METRIC_RUNTIME_SCHEMA = 'transvoice.target_metric_runtime.v2';
@@ -86,27 +87,44 @@ function resolveFemV1ShadowRuntime({ voiceState, signal, bridge, stage, motorMap
   const finalizedAttempt = explicitEvent
     ? null
     : finalizedAttemptFromVoiceState(voiceState, captureEvidence, observations);
-  const resolved = resolveFemV1ShadowSessionTurn({
-    shadowState: voiceState?.femV1ShadowState || null,
-    learnerState: {
-      mastery: masteryState || voiceState?.beginnerMastery || null,
-      motorResponseMap: motorMap || voiceState?.motorResponseMap || null,
-      goalCueOverlay: voiceState?.goalCueOverlay || null,
-      goalProfile: voiceState?.goalProfile || null,
-      capabilityProfile: voiceState?.capabilityProfile || null,
-    },
-    sessionState: {
-      sessionId: voiceState?.sessionId || explicitEvent?.sessionId || null,
-      stage,
-      pendingTrial: voiceState?.pendingTrial || null,
-      revision: Number.isInteger(voiceState?.femV1Revision) ? voiceState.femV1Revision : null,
-      attemptSequence: voiceState?.attemptSequence || voiceState?.attempSequence || null,
-    },
-    sourceSessionRevision: Number.isInteger(voiceState?.femV1Revision) ? voiceState.femV1Revision : null,
+  const sessionId = voiceState?.sessionId || explicitEvent?.sessionId || null;
+  const learnerState = {
+    mastery: masteryState || voiceState?.beginnerMastery || null,
+    motorResponseMap: motorMap || voiceState?.motorResponseMap || null,
+    goalCueOverlay: voiceState?.goalCueOverlay || null,
+    goalProfile: voiceState?.goalProfile || null,
+    capabilityProfile: voiceState?.capabilityProfile || null,
+  };
+  const sessionState = {
+    sessionId,
+    stage,
+    pendingTrial: voiceState?.pendingTrial || null,
+    revision: Number.isInteger(voiceState?.femV1Revision) ? voiceState.femV1Revision : null,
+    attemptSequence: voiceState?.attemptSequence || voiceState?.attempSequence || null,
+  };
+  const runtimeArgs = {
+    learnerState,
+    sessionState,
     finalizedAttemptEvent: explicitEvent,
     finalizedAttempt,
     turnEvidence: explicitEvent ? null : { selfReport, captureEvidence, observations },
     cueResolver: resolvePitchAlphaCueForShadow,
+  };
+
+  // A stable session identity is required only for resumable private shadow
+  // state. Legacy/read-only callers without one still get the exact same pure
+  // FEM decision, but no state is offered for persistence.
+  if (!sessionId) {
+    return {
+      ...resolveFemV1RuntimeTurn({ mode: 'shadow', ...runtimeArgs }),
+      nextShadowState: null,
+    };
+  }
+
+  const resolved = resolveFemV1ShadowSessionTurn({
+    shadowState: voiceState?.femV1ShadowState || null,
+    ...runtimeArgs,
+    sourceSessionRevision: Number.isInteger(voiceState?.femV1Revision) ? voiceState.femV1Revision : null,
   });
   return {
     ...resolved.turn,
