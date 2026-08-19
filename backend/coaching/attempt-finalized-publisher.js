@@ -26,6 +26,13 @@ function buildAttemptFinalizedEventId({ sessionId, attemptArtifactId } = {}) {
   return `afe:${digest.slice(0, 48)}`;
 }
 
+function digestNormalizedEvent(event) {
+  const normalized = normalizeAttemptFinalizedEvent(event);
+  return crypto.createHash('sha256')
+    .update(JSON.stringify(normalized))
+    .digest('hex');
+}
+
 function publishAttemptFinalizedEvent({
   sessionId,
   attemptArtifactId,
@@ -66,6 +73,7 @@ function publishAttemptFinalizedEvent({
     event,
     eventId: event.eventId,
     evidenceDigest: event.evidenceDigest,
+    eventDigest: digestNormalizedEvent(event),
   });
 }
 
@@ -79,9 +87,7 @@ function reconcileAttemptFinalizedPublication(previousEvent, candidateEvent) {
     || previous.sessionId !== candidate.sessionId) {
     throw new Error('attempt_finalized_identity_conflict');
   }
-  if (previous.evidenceDigest !== candidate.evidenceDigest
-    || previous.eligible !== candidate.eligible
-    || previous.ineligibleReason !== candidate.ineligibleReason) {
+  if (digestNormalizedEvent(previous) !== digestNormalizedEvent(candidate)) {
     throw new Error('attempt_finalized_content_conflict');
   }
   return Object.freeze({ status: 'already_published', event: previous });
@@ -91,6 +97,7 @@ module.exports = {
   ATTEMPT_FINALIZED_EVENT_SCHEMA,
   ATTEMPT_FINALIZED_PUBLISHER_SCHEMA,
   buildAttemptFinalizedEventId,
+  digestNormalizedEvent,
   publishAttemptFinalizedEvent,
   reconcileAttemptFinalizedPublication,
 };

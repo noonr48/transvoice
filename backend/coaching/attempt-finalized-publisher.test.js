@@ -32,6 +32,7 @@ test('publisher creates a stable event identity from session plus attempt artifa
     sessionId: 'session-1', attemptArtifactId: 'attempt-1',
   }));
   assert.match(first.eventId, /^afe:[0-9a-f]{48}$/);
+  assert.match(first.eventDigest, /^[0-9a-f]{64}$/);
 });
 
 test('same finalized attempt content reconciles idempotently', () => {
@@ -51,6 +52,22 @@ test('same artifact identity with changed evidence fails closed', () => {
     () => reconcileAttemptFinalizedPublication(first, changed),
     /attempt_finalized_content_conflict/,
   );
+});
+
+test('same artifact identity with changed sealed metadata fails closed', () => {
+  const first = publish().event;
+  for (const changed of [
+    publish({ finalizedAt: 1755400005000 }).event,
+    publish({ expectedSessionRevision: 5 }).event,
+    publish({ analyzerVersion: 'voice-trainer-next' }).event,
+    publish({ detectorPolicyVersion: 'pitch-dev-002' }).event,
+  ]) {
+    assert.equal(first.eventId, changed.eventId);
+    assert.throws(
+      () => reconcileAttemptFinalizedPublication(first, changed),
+      /attempt_finalized_content_conflict/,
+    );
+  }
 });
 
 test('different artifact gets a different stable event identity', () => {
