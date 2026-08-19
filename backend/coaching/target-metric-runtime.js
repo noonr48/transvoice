@@ -17,7 +17,8 @@ const { resolvePitchAlphaCueForShadow } = require('./cue-alpha-authority');
 const { resolveFemV1RuntimeTurn } = require('./fem-v1-runtime-turn');
 const { resolveFemV1ShadowSessionTurn } = require('./fem-v1-shadow-state');
 
-const TARGET_METRIC_RUNTIME_SCHEMA = 'transvoice.target_metric_runtime.v2';
+const TARGET_METRIC_RUNTIME_SCHEMA = 'transvoice.target_metric_runtime.v3';
+const FEM_V1_RUNTIME_MODES = Object.freeze(['off', 'shadow']);
 
 function resolveTargetMetricStage(repContext, signal) {
   const kind = String(repContext?.kind || signal?.takeKind || '').trim().toLowerCase();
@@ -49,6 +50,13 @@ function resolveRuntimeCurriculumPhase({ curriculumPhase = null, masteryState = 
     return normalizeBeginnerMasteryState(persisted).curriculumPhase;
   }
   return DEFAULT_CURRICULUM_PHASE;
+}
+
+function normalizeFemV1RuntimeMode(mode) {
+  if (mode === 'off') return 'off';
+  // Active FEM is deliberately unavailable at this shared seam. Unknown and
+  // attempted active values fail closed to shadow until the release gates pass.
+  return 'shadow';
 }
 
 function captureEvidenceFromSignal(signal) {
@@ -111,9 +119,6 @@ function resolveFemV1ShadowRuntime({ voiceState, signal, bridge, stage, motorMap
     cueResolver: resolvePitchAlphaCueForShadow,
   };
 
-  // A stable session identity is required only for resumable private shadow
-  // state. Legacy/read-only callers without one still get the exact same pure
-  // FEM decision, but no state is offered for persistence.
   if (!sessionId) {
     return {
       ...resolveFemV1RuntimeTurn({ mode: 'shadow', ...runtimeArgs }),
@@ -137,12 +142,15 @@ function evaluateTargetMetricRuntime({
   observations = null, persistenceByDimension = {}, allowUnreviewedCues = false,
   turnWindowStartedAt = undefined, contextComparability = {}, sectionLoopActive = false,
   productDomain = FEMINIZATION_V1_DOMAIN, curriculumPhase = null, masteryState = null,
+  femV1Mode = 'shadow',
 } = {}) {
   const resolvedMode = ['off', 'shadow', 'active'].includes(mode) ? mode : 'shadow';
+  const resolvedFemV1Mode = normalizeFemV1RuntimeMode(femV1Mode);
   if (resolvedMode === 'off') {
     return {
       schema: TARGET_METRIC_RUNTIME_SCHEMA, mode: 'off', stage: null, productDomain,
-      curriculumPhase: null, bridge: null, witness: null, femV1RuntimeTurn: null, applied: false,
+      curriculumPhase: null, bridge: null, witness: null, femV1Mode: 'off',
+      femV1RuntimeTurn: null, femV1NextShadowState: null, applied: false,
     };
   }
 
@@ -158,9 +166,9 @@ function evaluateTargetMetricRuntime({
     productDomain, curriculumPhase: resolvedCurriculumPhase, voiceState, motorMap, stage,
   });
 
-  const femV1RuntimeTurn = resolveFemV1ShadowRuntime({
-    voiceState, signal, bridge, stage, motorMap, masteryState,
-  });
+  const femV1RuntimeTurn = resolvedFemV1Mode === 'off'
+    ? null
+    : resolveFemV1ShadowRuntime({ voiceState, signal, bridge, stage, motorMap, masteryState });
 
   const baseWitness = buildTargetMetricShadowWitness(bridge, signal);
   const witness = baseWitness ? {
@@ -188,6 +196,7 @@ function evaluateTargetMetricRuntime({
     contextComparability: resolvedContextComparability,
     bridge,
     witness,
+    femV1Mode: resolvedFemV1Mode,
     femV1RuntimeTurn,
     femV1NextShadowState: femV1RuntimeTurn?.nextShadowState || null,
     applied,
@@ -195,8 +204,10 @@ function evaluateTargetMetricRuntime({
 }
 
 module.exports = {
+  FEM_V1_RUNTIME_MODES,
   TARGET_METRIC_RUNTIME_SCHEMA,
   evaluateTargetMetricRuntime,
+  normalizeFemV1RuntimeMode,
   resolveFemV1ShadowRuntime,
   resolveRuntimeContextComparability,
   resolveRuntimeCurriculumPhase,
