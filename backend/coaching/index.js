@@ -29,8 +29,18 @@ function nestedFemWitness(existingWitness, femRuntime) {
 }
 
 async function coachingTurn(options = {}) {
-  const result = await legacy.coachingTurn(options);
-  const femV1Mode = normalizeFemV1RuntimeMode(options.femV1ControllerMode || 'shadow');
+  const requestedFemV1Mode = options.femV1ControllerMode || 'shadow';
+
+  // The legacy implementation still contains the pre-orchestrator direct FEM
+  // calculation. Keep that compatibility code reachable in index-legacy.js,
+  // but suppress it on the canonical path so there is one actual FEM controller
+  // computation per public coaching turn. The caller's requested mode is used
+  // only by the shared runtime below.
+  const result = await legacy.coachingTurn({
+    ...options,
+    femV1ControllerMode: 'off',
+  });
+  const femV1Mode = normalizeFemV1RuntimeMode(requestedFemV1Mode);
 
   // Preserve a genuine OFF state. Every other requested value, including the
   // old 'active' spelling, is constrained by normalizeFemV1RuntimeMode to hard

@@ -13,6 +13,30 @@ test('public barrel preserves legacy exports while overriding coachingTurn only'
   assert.notEqual(coaching.coachingTurn, legacy.coachingTurn);
 });
 
+test('canonical wrapper suppresses the legacy direct FEM calculation', async () => {
+  const original = legacy.coachingTurn;
+  let observedMode = null;
+  legacy.coachingTurn = async (options = {}) => {
+    observedMode = options.femV1ControllerMode;
+    return {
+      signal: null,
+      targetMetricBridge: null,
+      targetMetricShadowWitness: null,
+    };
+  };
+  try {
+    const result = await coaching.coachingTurn({
+      voiceState: { sessionId: 'single-authority-session' },
+      femV1ControllerMode: 'active',
+    });
+    assert.equal(observedMode, 'off');
+    assert.ok(result.femV1RuntimeTurn);
+    assert.equal(result.femV1RuntimeTurn.mode, 'shadow');
+  } finally {
+    legacy.coachingTurn = original;
+  }
+});
+
 test('public coachingTurn exposes the shared FEM runtime as its one returned authority', async () => {
   const result = await coaching.coachingTurn({
     voiceState: {
