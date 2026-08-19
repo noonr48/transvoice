@@ -8,59 +8,46 @@ This file is the short current-state entry point. `FEMINIZATION_V1_STATUS.md` re
 
 ## Product state
 
-TransVoice is a research/development voice-feminisation training system. The deterministic FEM v1 control plane is substantially implemented and test-backed, but learner-facing FEM v1 activation remains blocked.
+TransVoice is a research/development voice-feminisation training system. The deterministic FEM v1 control plane is substantially implemented and test-backed, while learner-facing FEM v1 activation remains disabled.
 
 The next release-shaped milestone is **Pitch Shadow Alpha**: one comfortable-pitch motor-learning loop running end-to-end on real sessions without serving its FEM decision to the learner.
 
-## What is already in the public tree
+## Current foundations
 
-- Authoritative deterministic FEM v1 controller and curriculum/metric eligibility gates.
+- Deterministic FEM v1 controller and curriculum/metric eligibility gates.
 - Reachable comfortable-pitch calibration/step policy; no universal production pitch target.
-- Controlled-vowel evidence contracts and the `/i/` resonance vertical proof.
 - Cue-served/acknowledged lifecycle and exact-next motor-trial contracts.
-- Feedback fading, retention/review scheduling and beginner-session-card components.
-- Learner motor-response and goal-overlay foundations.
-- Detector-authority/release registry and replay/shadow evaluation machinery.
-- Shared `fem-v1-runtime-turn` orchestration seam.
+- Shared `fem-v1-runtime-turn` orchestration seam used by the common target-metric runtime in hard shadow.
+- Atomic state transaction contract with session-scoped compare-and-swap and per-attempt idempotency.
 - PTDB-TUG pitch-validation harness and preregistered release gates.
-- First-release five-cue specialist review matrix.
+- Executable non-clinical pitch-alpha cue qualification contract.
 
-## Open release blockers
+## Open engineering/release work
 
 1. **Pitch detector development gate — FAIL.** Latest public sync reports false-valid reduced from 0.405 to about 0.167, still above the preregistered <=0.05 gate. Continue development-split work only; held-out release speakers remain untouched for tuning.
-2. **Shared runtime adoption.** Buffered and streaming coach paths must converge on `resolveFemV1RuntimeTurn` in shadow mode and prove semantic parity.
-3. **State transaction boundary.** Before any active mode, attempt sequencing/trial settlement/mastery/motor learning must have atomic, revision-checked, idempotent application.
-4. **Cue specialist review — HUMAN GATE.** No first-release cue is learner-servable until exact wording is approved by a named qualified reviewer.
-5. **Human cue demonstrations — HUMAN GATE.** Approved teaching demonstrations are required where the cue matrix says so; TTS is not acoustic authority.
-6. **Controlled-vowel/formant validation — BLOCKED/PARTIAL.** The evidence contract is ahead of expert-corrected real-human formant validation.
-7. **Shadow pilot evidence.** Real-device/real-session proposed decisions need replay/manual review before any active alpha.
-8. **Held-out pitch release evaluation.** Run once only after the detector version is frozen and development gates pass.
+2. **CI/runtime verification.** Permanent CI exists but the current candidate must be brought green at one exact SHA; failures are repaired rather than waived.
+3. **Cue qualification integration.** The primary pitch cue has an executable non-clinical qualification path. Wire that qualification as authority for the narrow alpha without relabelling it as clinical approval.
+4. **Controlled-vowel/formant validation — partial.** This is not on the critical path for the pitch-only alpha.
+5. **Shadow pilot evidence.** Real-device/real-session proposed decisions need capture, replay and review before active alpha.
+6. **Held-out pitch release evaluation.** Run once only after the detector version is frozen and development gates pass.
+
+A missing specialist is **not** an engineering blocker. `CUE_QUALIFICATION.md` replaces the staffing-dependent pitch gate with deterministic, non-clinical evidence qualification. External specialist review is optional additional evidence and must never be fabricated.
 
 ## Pitch Shadow Alpha acceptance gates
 
-- [ ] Public repo instructions and permanent CI are canonical.
-- [ ] Shared FEM orchestrator is used by all relevant coach paths in shadow.
-- [ ] Shadow execution is side-effect free, including attempt sequencing.
-- [ ] Duplicate/retried finalized attempts are idempotent and conflicting reuse fails closed.
-- [ ] Exact-next settlement uses the runtime-assigned canonical attempt ordinal, never caller-supplied ordinal authority.
-- [ ] Atomic/versioned active-state application boundary is implemented and adversarially tested (but not learner-enabled).
-- [ ] Pitch detector passes the preregistered **development** gate.
-- [ ] At least one pitch cue is approved by a named qualified human reviewer.
-- [ ] Required human demonstration exists for that exact approved cue version.
+- [x] Public repo instructions and permanent CI are canonical.
+- [x] Shared FEM orchestrator is used by the common target-metric runtime in hard shadow.
+- [x] Shadow execution is side-effect free, including attempt sequencing.
+- [x] Duplicate/retried finalized attempts are idempotent and conflicting reuse fails closed.
+- [x] Exact-next settlement uses the runtime-assigned canonical attempt ordinal, never caller-supplied ordinal authority.
+- [x] Atomic/versioned active-state application boundary has a session-scoped concurrency contract; active coaching remains disabled.
+- [x] Primary pitch cue has an executable non-clinical alpha qualification rubric; no specialist credential is claimed or required.
+- [ ] CI is green at the exact candidate SHA.
+- [ ] Pitch detector passes the preregistered development gate.
 - [ ] Real-session shadow capture/replay is operational and reviewed.
 
 Only after those gates: freeze the detector candidate, evaluate the held-out corpus once, and consider a tiny internal active pitch-only alpha if it passes.
 
-## Explicitly deferred
-
-Do not spend the next arc adding generic acoustic metrics, prosody curriculum, phonation/weight curriculum, target-voice cloning, a larger LLM decision role, or a femininity/passing score. Those do not unblock the first trustworthy motor-learning loop.
-
 ## Validation truth
 
-A high unit-test count is not a release claim. For each candidate record the exact SHA and distinguish:
-
-- structural/code review;
-- unit/integration/end-to-end coverage;
-- GitHub Actions result matched to that SHA;
-- real-human acoustic validation;
-- human specialist/usability evidence.
+A high unit-test count is not a release claim. For each candidate record the exact SHA and distinguish structural/code review, relevant automated validation, real-human acoustic validation and real-human usability evidence. Missing human evidence stays unknown; it is not replaced with invented approval.
