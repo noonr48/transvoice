@@ -1,73 +1,49 @@
-# TransVoice Agent Entry Point
+# TransVoice Repository Instructions
 
-## Authoritative current product direction
+This public repository is the canonical engineering tree for TransVoice.
 
-For new development, read these files in order:
+## Current milestone
 
-1. `docs/FEMINIZATION_V1_MASTER_PLAN.md`
-2. `docs/FEMINIZATION_V1_AGENT_EXECUTION.md`
-3. `docs/FEMINIZATION_V1_BACKLOG.yaml`
-4. `docs/FEMINIZATION_V1_STATUS.md`
-5. `docs/FEMINIZATION_V1_DECISION_LOG.md`
+The release-shaped target is **Pitch Shadow Alpha**: one comfortable-pitch FEM v1 motor-learning loop executing through the shared runtime in shadow before any learner-facing FEM activation.
 
-These documents define the next product phase. Older design documents remain useful historical context, but they do not override the Feminization Foundations v1 contract when they conflict with it.
+Read `docs/CURRENT_STATUS.md`, `docs/CUE_QUALIFICATION.md`, and `docs/DETECTOR_BENCHMARK_LEDGER.md` before changing the FEM runtime, pitch detector, cue policy, or release gates.
 
-## Initial product scope
+## Product laws
 
-The initial active product is **adult beginner MTF/transfeminine English speaking-voice feminisation**. It is deliberately narrow. Do not expand into masculinisation, nonbinary/bidirectional training, singing, surgery rehabilitation, open-ended spontaneous-speech coaching, target-voice cloning, or extra acoustic dimensions until the v1 release gates are met.
+- Preserve measurement honesty. Never convert missing/unreliable acoustic evidence into a learner correction.
+- Never weaken preregistered detector gates to make a candidate pass.
+- Do not tune on held-out release speakers.
+- Comfortable-pitch targets are individualized and reachable; do not introduce a universal production-pitch target.
+- Safety/capture validity outrank correction. Pain, increasing strain, explicit stop requests and unusable capture fail closed.
+- Shadow mode must remain side-effect free and must not serve FEM instructions or request causal motor trials.
+- Exact-next authority comes from the runtime-assigned canonical attempt sequence, not caller-supplied ordinals.
+- Active state application, if introduced later, must be atomic, revision checked and idempotent.
 
-The first two end-to-end product proofs are:
+## Cue evidence policy
 
-1. **Comfortable pitch:** calibration → approved cue genuinely served → exact next take → protected verification → feedback fading → no-feedback retention → mastery update.
-2. **Controlled `/i/` resonance:** authoritative controlled-vowel evidence → approved cue genuinely served → exact next `/i/` take → resonance movement with pitch/effort protected → word transfer → no-feedback retention → mastery update.
+A missing specialist is **not** an engineering blocker. Do not fabricate a specialist, clinical approval, study result, human recording or usability result.
 
-## Non-negotiable laws
+For the narrow pitch alpha, cue authority comes from the executable non-clinical qualification contract in `backend/coaching/cue-alpha-qualification.js`. Qualification is content- and metadata-derived, scope-limited and fail-closed. It does not claim clinical approval. External specialist review is optional additional evidence when available.
 
-- Curriculum phase selects the skill before metrics are ranked.
-- One learner-facing focus at a time.
-- No gender, femininity, passing, or global voice-quality score.
-- No anatomical position inferred from acoustics.
-- Pain stops active training.
-- Missing/unknown evidence is never treated as zero or success.
-- A cue receives causal credit only from the exact next eligible take after it was actually served.
-- Shadow decisions never update mastery or motor learning.
-- No active unreviewed cue.
-- No universal production pitch target or anonymous step constant.
-- Arbitrary uploaded speech cannot become a vowel/formant target.
-- TTS/synthetic output is not acoustic ground truth in v1.
-- LLMs may explain an approved deterministic decision; they may not choose technique, safety action, metric, target, or threshold.
-- Retention without continuous feedback is required before stable mastery.
+Do not broaden this non-clinical qualification to resonance, phonation/weight, anatomy-directed manipulation or other skills merely to make them servable. Each broader skill needs its own bounded evidence contract.
 
-## Repository/branch protocol
+A prerecorded human demonstration is not required for the first text-described pitch glide. TTS must never be treated as acoustic truth. If a future cue genuinely depends on imitation, establish and validate a demonstration-evidence contract for that cue rather than inventing one.
 
-`sol/target-metric-coaching-foundation` is an **integration/reference branch**. Do not continue piling unrelated features into PR #1. After the audit/freeze work, create scoped branches/PRs from the recorded integration SHA according to the master plan.
+## Validation
 
-Do not use GitHub Actions or other CI jobs to rewrite source and push generated code. Make source changes in the local checkout, inspect the diff, run tests, and push normal commits.
+Before publishing changes, run or obtain evidence for the relevant checks and report them separately:
 
-## First action for a new local agent
+- structural diff verification at an exact SHA;
+- Node coaching tests;
+- FEM product-law regressions;
+- VoiceTrainer Python tests;
+- frontend tests/typecheck where touched;
+- detector development/held-out evidence only under the preregistered protocol.
 
-Run the P0 audit from `docs/FEMINIZATION_V1_AGENT_EXECUTION.md`. In particular:
+A high test count is not a release claim. CI setup failure is not a product pass, and product failure is not to be hidden by changing the workflow.
 
-```bash
-git fetch --all --prune
-git switch sol/target-metric-coaching-foundation
-git pull --ff-only
-git rev-parse HEAD
-git status --short
-git log --oneline --decorate --graph main..HEAD
+## Scope discipline
 
-npm install --prefix transvoice-app/backend \
-  --ignore-scripts --no-package-lock --no-audit --no-fund
-node --test transvoice-app/backend/coaching/*.test.js
+Do not add generic metrics, prosody curriculum, phonation/weight curriculum, target-voice cloning, a larger LLM decision role, or femininity/passing scores unless they directly unblock an explicitly requested milestone.
 
-cd transvoice-app/services/voice-trainer
-python -m pytest
-```
-
-Then create/update `docs/FEMINIZATION_V1_RUNTIME_AUDIT.md` and `docs/FEMINIZATION_V1_STATUS.md`. Do not claim that a module is active merely because a file or unit test exists; trace the actual buffered, SSE, persistence, and UI call paths.
-
-## Development priority
-
-Do not add more generic metrics. The next priority is:
-
-`audit/freeze → hard curriculum gate → authoritative controller → pitch vertical slice → authoritative controlled-vowel evidence → /i/ resonance vertical slice → feedback fading/retention → motor-response split → acoustic validation → specialist review → limited active rollout`.
+Keep generated/vendor changes out of ordinary patches. Preserve concurrent work and never force-update shared branches.

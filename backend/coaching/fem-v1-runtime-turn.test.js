@@ -2,10 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {
-  FEM_V1_RUNTIME_SCHEMA,
-  resolveFemV1RuntimeTurn,
-} = require('./fem-v1-runtime-turn');
+const { FEM_V1_RUNTIME_SCHEMA, resolveFemV1RuntimeTurn } = require('./fem-v1-runtime-turn');
+const { createAttemptFinalizedEvent } = require('./attempt-finalized-event');
 const { createBeginnerMasteryState } = require('./beginner-mastery');
 const { createAttemptSequence, recordFinalizedAttempt } = require('./session-attempt-sequence');
 
@@ -24,6 +22,7 @@ function sessionState(overrides = {}) {
   return {
     sessionId: 'session-1',
     stage: 'phrase',
+    revision: 4,
     pendingTrial: null,
     attemptSequence: seq,
     baselineAttemptOrdinal: 1,
@@ -35,7 +34,7 @@ function sessionState(overrides = {}) {
 function attempt(overrides = {}) {
   return {
     attemptArtifactId: 'attempt-1',
-    ordinal: 2,
+    ordinal: 999,
     eligible: true,
     ineligibleReason: null,
     observations: [],
@@ -45,167 +44,210 @@ function attempt(overrides = {}) {
   };
 }
 
-test('T3-1: safety stop short-circuits everything, including trial settlement', () => {
+function pendingTrial(overrides = {}) {
+  return {
+    schema: 'transvoice.pending_motor_trial.v1',
+    status: 'pending',
+    trialId: 'trial-1',
+    sessionId: 'session-1',
+    attemptSequenceBound: true,
+    baselineAttemptOrdinal: 1,
+    ...overrides,
+  };
+}
+
+test('safety stop short-circuits coaching', () => {
   const result = resolveFemV1RuntimeTurn({
-    mode: 'shadow',
-    learnerState: learnerState(),
-    sessionState: sessionState({ pendingTrial: { schema: 'transvoice.pending_motor_trial.v1', status: 'pending', trialId: 't1', attemptSequenceBound: true, baselineAttemptOrdinal: 1 } }),
-    finalizedAttempt: attempt({ selfReport: { pain: true } }),
-    now: 1755400000000,
+    mode: 'shadow', learnerState: learnerState(), sessionState: sessionState(),
+    finalizedAttempt: attempt({ selfReport: { pain: true } }), now: 1755400000000,
   });
   assert.equal(result.action, 'stop_for_safety');
-  // Pain settles NOTHING: the trial was not settled — the not_applicable
-  // marker with no_pending_trial-family result is the no-settlement state.
-  // (A real pending trial would surface result pain_reported from the
-  // motor-trial gate; a pain turn must never credit a cue.)
-  assert.equal(result.settlement.status, 'not_applicable');
-  assert.notEqual(result.settlement.result, 'settled');
-  assert.notEqual(result.settlement.result, 'worked_verified');
-  assert.equal(result.controllerTurn.action, 'stop_for_safety');
   assert.equal(result.safetyReason, 'pain');
 });
 
-test('T3-2: exact-next settlement runs BEFORE the controller decides the next cue', () => {
+test('pain terminally invalidates a real pending causal trial', () => {
   const result = resolveFemV1RuntimeTurn({
-    mode: 'shadow',
-    learnerState: learnerState(),
-    sessionState: sessionState(),
-    finalizedAttempt: attempt({
-      observations: [{
-        metricId: 'pitch.median_hz', metricDefinitionVersion: 'voice-metrics-v4-formants',
-        dimension: 'pitch.register', value: 155, unit: 'Hz',
-        attemptArtifactId: 'attempt-1', taskId: 'task-1', takeKind: 'phrase', analysisProfile: 'standard',
-        confidence: { signal: 0.95, extractor: 0.95, target: 0.95 },
-        target: { low: 180, high: 220, scale: 1, source: 'reference', targetKey: 't1', confidence: 0.95 },
-        flags: [], persistenceCount: 2, importance: 0.7, controllability: 0.8,
-        metadata: { targetScaleUnit: 'semitone', detectorFamily: 'yin', pitchValidFrameCount: 40, hitPitchCeiling: false },
-      }],
-    }),
-    now: 1755400001000,
+    mode: 'shadow', learnerState: learnerState(),
+    sessionState: sessionState({ pendingTrial: pendingTrial() }),
+    finalizedAttempt: attempt({ selfReport: { pain: true } }), now: 1755400000000,
   });
-  // settlement state is exposed (may be not_applicable when no trial was pending)
-  assert.ok(result.settlement);
-  assert.ok(result.controllerTurn);
-  assert.equal(result.controllerTurn.phase, 'pitch_foundation');
+  assert.equal(result.action, 'stop_for_safety');
+  assert.equal(result.settlement.status, 'invalidated');
+  assert.equal(result.settlement.result, 'pain_reported');
+  assert.equal(result.shadowStateDelta.pendingTrial.status, 'invalidated');
 });
 
-test('T3-3: shadow mode computes the full turn but writes nothing', () => {
+test('terminal settlement is applied to working state before controller resolution', () => {
   const result = resolveFemV1RuntimeTurn({
-    mode: 'shadow',
-    learnerState: learnerState(),
-    sessionState: sessionState(),
-    finalizedAttempt: attempt(),
-    now: 1755400000000,
+    mode: 'shadow', learnerState: learnerState(),
+    sessionState: sessionState({ pendingTrial: pendingTrial({ sessionId: 'different-session' }) }),
+    finalizedAttempt: attempt(), now: 1755400001000,
+  });
+  assert.equal(result.settlement.status, 'invalidated');
+  assert.equal(result.settlement.result, 'session_changed');
+  assert.notEqual(result.controllerTurn.action, 'verify_attempt');
+  assert.equal(result.shadowStateDelta.pendingTrial.status, 'invalidated');
+});
+
+test('shadow computes a private next-state delta without mutating production state', () => {
+  const session = sessionState();
+  const before = structuredClone(session);
+  const result = resolveFemV1RuntimeTurn({
+    mode: 'shadow', learnerState: learnerState(), sessionState: session,
+    finalizedAttempt: attempt(), now: 1755400000000,
   });
   assert.equal(result.mode, 'shadow');
-  assert.deepEqual(result.proposedStateDelta, {}); // no writes in shadow
-  assert.ok(result.witness); // witness IS retained for evaluation
-  assert.equal(result.witness.mode, 'shadow');
+  assert.deepEqual(result.proposedStateDelta, {});
+  assert.equal(result.shadowStateDelta.attemptOrdinal, 2);
+  assert.equal(result.shadowStateDelta.attemptSequence.attempts.length, 2);
+  assert.deepEqual(session, before);
 });
 
-test('T3-4: active mode proposes state writes (not applies — the caller applies)', () => {
+test('active mode proposes the same causal sequence state but never mutates caller state', () => {
+  const session = sessionState();
+  const before = structuredClone(session);
   const result = resolveFemV1RuntimeTurn({
-    mode: 'active',
-    learnerState: learnerState(),
-    sessionState: sessionState(),
-    finalizedAttempt: attempt(),
-    now: 1755400000000,
+    mode: 'active', learnerState: learnerState(), sessionState: session,
+    finalizedAttempt: attempt(), now: 1755400000000,
   });
-  assert.equal(result.mode, 'active');
-  assert.ok(Object.keys(result.proposedStateDelta).length >= 0); // delta is a proposal object
+  assert.deepEqual(result.shadowStateDelta, {});
+  assert.equal(result.proposedStateDelta.attemptOrdinal, 2);
+  assert.equal(result.proposedStateDelta.attemptSequence.attempts.length, 2);
+  assert.deepEqual(session, before);
 });
 
-test('T3-5: unknown mode fails to shadow', () => {
+test('unknown mode fails closed to shadow', () => {
   const result = resolveFemV1RuntimeTurn({
-    mode: 'turbo',
-    learnerState: learnerState(),
-    sessionState: sessionState(),
-    finalizedAttempt: attempt(),
-    now: 1755400000000,
+    mode: 'turbo', learnerState: learnerState(), sessionState: sessionState(), finalizedAttempt: attempt(),
   });
   assert.equal(result.mode, 'shadow');
 });
 
-test('T3-6: the witness is privacy-bounded — no raw observations, audio, or cue prose', () => {
+test('witness is privacy bounded', () => {
   const result = resolveFemV1RuntimeTurn({
-    mode: 'shadow',
-    learnerState: learnerState(),
-    sessionState: sessionState(),
-    finalizedAttempt: attempt({
-      observations: [{
-        metricId: 'pitch.median_hz', dimension: 'pitch.register', value: 155, unit: 'Hz',
-        attemptArtifactId: 'a1', flags: [], confidence: { signal: 0.9, extractor: 0.9, target: 0.9 },
-        target: { low: 180, high: 220, scale: 1, source: 'ref', targetKey: 't1', confidence: 0.9 },
-        metadata: {}, takeKind: 'phrase', taskId: 'task-1', analysisProfile: 'standard',
-        persistenceCount: 1, importance: 0.5, controllability: 0.5,
-      }],
-    }),
-    now: 1755400000000,
+    mode: 'shadow', learnerState: learnerState(), sessionState: sessionState(),
+    finalizedAttempt: attempt({ observations: [{ metricId: 'pitch.median_hz', value: 155, secret: 'do-not-copy' }] }),
   });
-  const witnessJson = JSON.stringify(result.witness);
-  assert.ok(!witnessJson.includes('observations'));
-  assert.ok(!witnessJson.includes('instruction'));
-  assert.ok(!witnessJson.includes('audioBase64'));
-  // witness carries bounded identifiers only
-  assert.ok(result.witness.schema === FEM_V1_RUNTIME_SCHEMA);
+  const json = JSON.stringify(result.witness);
+  assert.equal(result.witness.schema, FEM_V1_RUNTIME_SCHEMA);
+  assert.ok(!json.includes('observations'));
+  assert.ok(!json.includes('instruction'));
+  assert.ok(!json.includes('secret'));
 });
 
-test('T3-7: capture-unusable attempt repairs before any coaching', () => {
+test('capture-unusable attempt repairs before coaching', () => {
   const result = resolveFemV1RuntimeTurn({
-    mode: 'shadow',
-    learnerState: learnerState(),
-    sessionState: sessionState(),
-    finalizedAttempt: attempt({ captureEvidence: { usable: false, reasons: ['low_snr'] } }),
-    now: 1755400000000,
+    mode: 'shadow', learnerState: learnerState(), sessionState: sessionState(),
+    finalizedAttempt: attempt({
+      eligible: false, ineligibleReason: 'capture_unusable',
+      captureEvidence: { usable: false, reasons: ['low_snr'] },
+    }),
   });
   assert.equal(result.controllerTurn.action, 'repair_capture');
 });
 
-test('T3-8: ineligible attempt with a reason is recorded, not silently skipped', () => {
-  const result = resolveFemV1RuntimeTurn({
-    mode: 'shadow',
-    learnerState: learnerState(),
-    sessionState: sessionState(),
-    finalizedAttempt: attempt({ eligible: false, ineligibleReason: 'capture_unusable' }),
-    now: 1755400000000,
-  });
-  // the runtime consumed it as ineligible: the controller still runs, no settlement fired
-  assert.ok(result.finalizedAttemptDisposition);
-  assert.equal(result.finalizedAttemptDisposition.eligible, false);
-  assert.equal(result.finalizedAttemptDisposition.ineligibleReason, 'capture_unusable');
-});
-
-test('T3-9 (cycle-1): the orchestrator forwards ALL stop fields — no silent drop on adoption', () => {
-  const result = resolveFemV1RuntimeTurn({
-    mode: 'shadow',
-    learnerState: learnerState(),
-    sessionState: sessionState(),
+test('all typed stop/reduce fields survive orchestration', () => {
+  const stop = resolveFemV1RuntimeTurn({
+    mode: 'shadow', learnerState: learnerState(), sessionState: sessionState(),
     finalizedAttempt: attempt({ selfReport: { effort: 2, voiceLoss: true } }),
-    now: 1755400000000,
   });
-  assert.equal(result.action, 'stop_for_safety');
-  assert.equal(result.safetyReason, 'voice_loss');
+  assert.equal(stop.action, 'stop_for_safety');
+  assert.equal(stop.safetyReason, 'voice_loss');
 
-  const hoarse = resolveFemV1RuntimeTurn({
-    mode: 'shadow',
-    learnerState: learnerState(),
-    sessionState: sessionState(),
+  const reduce = resolveFemV1RuntimeTurn({
+    mode: 'shadow', learnerState: learnerState(), sessionState: sessionState(),
     finalizedAttempt: attempt({ selfReport: { effort: 2, newOrIncreasedHoarseness: true } }),
-    now: 1755400000000,
   });
-  assert.equal(hoarse.action, 'reduce_difficulty');
+  assert.equal(reduce.action, 'reduce_difficulty');
 });
 
-test('T3-10 (cycle-1): pain-skip on a real pending trial labels itself honestly', () => {
+test('runtime ordinal is authoritative even if caller spoofs an ordinal', () => {
   const result = resolveFemV1RuntimeTurn({
-    mode: 'shadow',
-    learnerState: learnerState(),
-    sessionState: sessionState({ pendingTrial: { schema: 'transvoice.pending_motor_trial.v1', status: 'pending', trialId: 'mt-xyz', attemptSequenceBound: true, baselineAttemptOrdinal: 1 } }),
+    mode: 'active', learnerState: learnerState(), sessionState: sessionState(),
+    finalizedAttempt: attempt({ ordinal: 999 }),
+  });
+  assert.equal(result.finalizedAttemptDisposition.ordinal, 2);
+  assert.equal(result.proposedStateDelta.attemptOrdinal, 2);
+});
+
+test('duplicate finalized attempt replay is idempotent', () => {
+  const session = sessionState();
+  recordFinalizedAttempt(session.attemptSequence, { attemptArtifactId: 'attempt-1', eligible: true });
+  const result = resolveFemV1RuntimeTurn({
+    mode: 'active', learnerState: learnerState(), sessionState: session, finalizedAttempt: attempt(),
+  });
+  assert.equal(result.finalizedAttemptDisposition.ordinal, 2);
+  assert.equal(result.finalizedAttemptDisposition.replayed, true);
+  assert.equal(result.proposedStateDelta.attemptSequence, undefined);
+});
+
+test('conflicting reuse of an attempt artifact id fails closed', () => {
+  const session = sessionState();
+  recordFinalizedAttempt(session.attemptSequence, { attemptArtifactId: 'attempt-1', eligible: true });
+  assert.throws(() => resolveFemV1RuntimeTurn({
+    mode: 'active', learnerState: learnerState(), sessionState: session,
+    finalizedAttempt: attempt({ eligible: false, ineligibleReason: 'capture_unusable' }),
+  }), /attempt_artifact_conflict/);
+});
+
+test('partial turn evidence can add effort but cannot erase finalized pain', () => {
+  const result = resolveFemV1RuntimeTurn({
+    mode: 'shadow', learnerState: learnerState(), sessionState: sessionState(),
     finalizedAttempt: attempt({ selfReport: { pain: true } }),
-    now: 1755400000000,
+    turnEvidence: { selfReport: { effort: 2 } },
   });
   assert.equal(result.action, 'stop_for_safety');
-  assert.equal(result.settlement.status, 'not_applicable');
-  assert.equal(result.settlement.result, 'pain_skipped_settlement');
-  assert.equal(result.settlement.trialId, 'mt-xyz');
+  assert.equal(result.safetyReason, 'pain');
+});
+
+test('contradictory self-report surfaces fail closed', () => {
+  assert.throws(() => resolveFemV1RuntimeTurn({
+    mode: 'shadow', learnerState: learnerState(), sessionState: sessionState(),
+    finalizedAttempt: attempt({ selfReport: { pain: true } }),
+    turnEvidence: { selfReport: { pain: false } },
+  }), /attempt_evidence_conflict:selfReport\.pain/);
+});
+
+test('malformed persisted attempt sequence fails closed instead of becoming empty state', () => {
+  const bad = sessionState({
+    attemptSequence: {
+      schema: 'transvoice.session_attempt_sequence.v1', nextOrdinal: 2,
+      attempts: [
+        { ordinal: 1, attemptArtifactId: 'a', eligible: true, ineligibleReason: null },
+        { ordinal: 1, attemptArtifactId: 'b', eligible: true, ineligibleReason: null },
+      ],
+    },
+  });
+  assert.throws(() => resolveFemV1RuntimeTurn({
+    mode: 'shadow', learnerState: learnerState(), sessionState: bad,
+  }), /attempt_sequence_invalid/);
+});
+
+test('explicit finalized event is the sealed evidence authority', () => {
+  const event = createAttemptFinalizedEvent({
+    eventId: 'evt-1', sessionId: 'session-1', attemptArtifactId: 'attempt-event-1',
+    finalizedAt: 1755400000000, expectedSessionRevision: 4, eligible: true,
+    evidence: {
+      selfReport: { effort: 2 }, captureEvidence: { usable: true, reasons: [] }, observations: [],
+    },
+  });
+  const result = resolveFemV1RuntimeTurn({
+    mode: 'shadow', learnerState: learnerState(), sessionState: sessionState(), finalizedAttemptEvent: event,
+  });
+  assert.equal(result.finalizedAttemptDisposition.attemptArtifactId, 'attempt-event-1');
+  assert.equal(result.witness.finalizedAttempt.source, 'explicit_event');
+  assert.equal(result.witness.finalizedAttempt.evidenceDigest, event.evidenceDigest);
+});
+
+test('supplemental evidence cannot alter a sealed finalized event', () => {
+  const event = createAttemptFinalizedEvent({
+    eventId: 'evt-1', sessionId: 'session-1', attemptArtifactId: 'attempt-event-1', eligible: true,
+    evidence: {
+      selfReport: { effort: 2 }, captureEvidence: { usable: true, reasons: [] }, observations: [],
+    },
+  });
+  assert.throws(() => resolveFemV1RuntimeTurn({
+    mode: 'shadow', learnerState: learnerState(), sessionState: sessionState(),
+    finalizedAttemptEvent: event, turnEvidence: { selfReport: { pain: true } },
+  }), /attempt_evidence_conflict:sealed_event/);
 });

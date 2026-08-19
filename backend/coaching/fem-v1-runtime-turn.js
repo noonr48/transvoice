@@ -1,105 +1,233 @@
 'use strict';
 
-const { resolveFeminizationV1Turn, IMMEDIATE_STOP_FIELDS, REDUCE_DIFFICULTY_FLAG_FIELDS } = require('./feminization-v1-controller');
-const { normalizeSelfReport, parseFivePoint } = require('./voice-self-report');
+const {
+  resolveFeminizationV1Turn,
+  IMMEDIATE_STOP_FIELDS,
+  REDUCE_DIFFICULTY_FLAG_FIELDS,
+} = require('./feminization-v1-controller');
+const { normalizeSelfReport } = require('./voice-self-report');
 const { settlePendingMotorTrial } = require('./motor-trial');
+const {
+  ATTEMPT_SEQUENCE_SCHEMA,
+  createAttemptSequence,
+  recordFinalizedAttempt,
+} = require('./session-attempt-sequence');
+const {
+  attemptFromFinalizedEvent,
+  digestJson,
+  normalizeAttemptFinalizedEvent,
+  resolveCanonicalAttemptEvidence,
+} = require('./attempt-finalized-event');
 
-/**
- * TV-FEM-R2-001 — the shared FEM runtime orchestrator (GPT-Pro §3).
- *
- * One pure boundary used by BOTH the buffered and SSE coaching paths so they
- * can never develop separate coaching semantics:
- *
- *   normalize strict input contracts
- *   → record finalized attempt in the session sequence
- *   → settle/invalidate pending trial (exact-next)
- *   → resolve safety and capture state
- *   → run the authoritative controller
- *   → build the beginner card
- *   → emit a privacy-bounded witness
- *   → return a PROPOSED state delta (applied by the caller in active mode;
- *     never applied here)
- *
- * Shadow mode: computes the identical turn, writes nothing (empty delta),
- * retains the bounded witness for evaluation. Active mode: same computation;
- * the delta is a proposal — the CALLER owns atomic application.
- */
-
-const FEM_V1_RUNTIME_SCHEMA = 'transvoice.fem_v1_runtime_turn.v1';
+const FEM_V1_RUNTIME_SCHEMA = 'transvoice.fem_v1_runtime_turn.v2';
 const MODES = Object.freeze(['active', 'shadow']);
+const MAX_ATTEMPT_ID_LENGTH = 160;
+const MAX_REASON_LENGTH = 120;
 
 function normalizeMode(mode) {
   return MODES.includes(mode) ? mode : 'shadow';
 }
 
-/**
- * Consume one finalized attempt into the session's attempt sequence.
- * Eligible attempts require no reason; ineligible attempts REQUIRE a
- * deterministic reason (the sequence module enforces this — we just delegate).
- */
-function consumeFinalizedAttempt(sessionState, finalizedAttempt) {
-  const disposition = {
-    attemptArtifactId: typeof finalizedAttempt?.attemptArtifactId === 'string'
-      ? finalizedAttempt.attemptArtifactId.slice(0, 160)
-      : null,
-    eligible: finalizedAttempt?.eligible === true,
-    ineligibleReason: typeof finalizedAttempt?.ineligibleReason === 'string'
-      ? finalizedAttempt.ineligibleReason.slice(0, 120)
-      : null,
-    ordinal: null,
-  };
-  const seq = sessionState?.attemptSequence;
-  if (seq && typeof seq === 'object' && !Array.isArray(seq)
-    && seq.schema === 'transvoice.session_attempt_sequence.v1' && disposition.attemptArtifactId) {
-    const { recordFinalizedAttempt } = require('./session-attempt-sequence');
-    const record = recordFinalizedAttempt(seq, {
-      attemptArtifactId: disposition.attemptArtifactId,
-      eligible: disposition.eligible,
-      ineligibleReason: disposition.ineligibleReason,
-    });
-    disposition.ordinal = record.ordinal;
-  }
-  return disposition;
+function validateText(value, field, maxLength) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${field}_required`);
+  const text = value.trim();
+  if (text.length > maxLength) throw new Error(`${field}_too_long`);
+  return text;
 }
 
-/**
- * Resolve the pending trial against the finalized attempt (exact-next).
- * Returns the settlement result or a not_applicable marker; null trial = null.
- */
-function resolvePendingTrial(sessionState, finalizedAttempt, nowMs) {
+function validateAndCloneAttemptSequence(sequence) {
+  if (sequence == null) return null;
+  if (!sequence || typeof sequence !== 'object' || Array.isArray(sequence)
+    || sequence.schema !== ATTEMPT_SEQUENCE_SCHEMA
+    || !Array.isArray(sequence.attempts)
+    || !Number.isInteger(sequence.nextOrdinal)
+    || sequence.nextOrdinal < 1) {
+    throw new Error('attempt_sequence_invalid');
+  }
+
+  const attempts = [];
+  const ids = new Set();
+  let priorOrdinal = 0;
+  for (const raw of sequence.attempts) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || !Number.isInteger(raw.ordinal) || raw.ordinal < 1 || raw.ordinal <= priorOrdinal
+      || typeof raw.eligible !== 'boolean') {
+      throw new Error('attempt_sequence_invalid');
+    }
+    const attemptArtifactId = validateText(
+      raw.attemptArtifactId,
+      'attempt_sequence_artifact_id',
+      MAX_ATTEMPT_ID_LENGTH,
+    );
+    if (ids.has(attemptArtifactId)) throw new Error('attempt_sequence_duplicate_artifact');
+    ids.add(attemptArtifactId);
+    let ineligibleReason = null;
+    if (raw.eligible !== true) {
+      ineligibleReason = validateText(
+        raw.ineligibleReason,
+        'attempt_sequence_ineligible_reason',
+        MAX_REASON_LENGTH,
+      );
+    }
+    attempts.push({
+      ordinal: raw.ordinal,
+      attemptArtifactId,
+      eligible: raw.eligible === true,
+      ineligibleReason,
+    });
+    priorOrdinal = raw.ordinal;
+  }
+  if (sequence.nextOrdinal <= priorOrdinal) throw new Error('attempt_sequence_next_ordinal_invalid');
+
+  return {
+    schema: ATTEMPT_SEQUENCE_SCHEMA,
+    nextOrdinal: sequence.nextOrdinal,
+    attempts,
+  };
+}
+
+function consumeFinalizedAttempt(sessionState, finalizedAttempt) {
+  const attemptArtifactId = validateText(
+    finalizedAttempt?.attemptArtifactId,
+    'attempt_artifact_id',
+    MAX_ATTEMPT_ID_LENGTH,
+  );
+  const eligible = finalizedAttempt?.eligible === true;
+  const ineligibleReason = eligible
+    ? null
+    : validateText(finalizedAttempt?.ineligibleReason, 'ineligible_reason', MAX_REASON_LENGTH);
+
+  const disposition = {
+    attemptArtifactId,
+    eligible,
+    ineligibleReason,
+    ordinal: null,
+    replayed: false,
+  };
+
+  const sequence = validateAndCloneAttemptSequence(sessionState?.attemptSequence)
+    || createAttemptSequence();
+
+  const existing = sequence.attempts.find((row) => row.attemptArtifactId === attemptArtifactId);
+  if (existing) {
+    const sameClassification = existing.eligible === eligible
+      && (eligible || existing.ineligibleReason === ineligibleReason);
+    if (!sameClassification) throw new Error('attempt_artifact_conflict');
+    disposition.ordinal = existing.ordinal;
+    disposition.replayed = true;
+    return { disposition, attemptSequence: sequence, sequenceChanged: false };
+  }
+
+  const record = recordFinalizedAttempt(sequence, {
+    attemptArtifactId,
+    eligible,
+    ineligibleReason,
+  });
+  disposition.ordinal = record.ordinal;
+  return { disposition, attemptSequence: sequence, sequenceChanged: true };
+}
+
+function normalizeEvidenceObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function buildSafetyState(selfReport) {
+  const normalized = normalizeSelfReport(selfReport || {});
+  const safetyState = {
+    pain: normalized.pain,
+    throatPain: normalized.throatPain,
+    effort: normalized.effort,
+    strain: normalized.strain,
+    fatigue: normalized.fatigue,
+    discomfort: normalized.discomfort,
+  };
+  for (const field of IMMEDIATE_STOP_FIELDS) safetyState[field] = selfReport?.[field] === true;
+  for (const field of REDUCE_DIFFICULTY_FLAG_FIELDS) safetyState[field] = selfReport?.[field] === true;
+  return safetyState;
+}
+
+function resolvePendingTrial({
+  sessionState,
+  finalizedAttempt,
+  canonicalOrdinal,
+  attemptSequence,
+  motorResponseMap,
+  nowMs,
+  attemptReplayed = false,
+}) {
   const trial = sessionState?.pendingTrial;
   if (!trial || typeof trial !== 'object' || trial.status !== 'pending') {
     return { status: 'not_applicable', result: 'no_pending_trial', trialId: null };
   }
-  if (!finalizedAttempt?.eligible) {
+
+  // A finalized artifact that is already present in the canonical attempt
+  // sequence is not a new causal event. In particular it must never settle or
+  // invalidate a pending trial that was opened after the artifact was first
+  // consumed. Safety evidence remains visible to the controller below, but the
+  // exact-next causal window waits for a genuinely new finalized attempt.
+  if (attemptReplayed === true) {
+    return {
+      status: 'not_applicable',
+      result: 'attempt_replayed',
+      trialId: trial.trialId || null,
+    };
+  }
+
+  const normalizedSelfReport = normalizeSelfReport(finalizedAttempt?.selfReport || {});
+  const pain = normalizedSelfReport.pain === true || normalizedSelfReport.throatPain === true;
+
+  // Pain closes the causal window even when the acoustic take itself was
+  // ineligible. A hurting attempt can never be skipped so a later take earns
+  // credit for the same cue.
+  if (!pain && finalizedAttempt?.eligible !== true) {
     return {
       status: 'not_applicable',
       result: 'attempt_ineligible',
       trialId: trial.trialId || null,
     };
   }
-  const settlement = settlePendingMotorTrial({
+
+  return settlePendingMotorTrial({
     trial,
     sessionId: sessionState?.sessionId,
     stage: sessionState?.stage,
-    afterAttemptArtifactId: finalizedAttempt.attemptArtifactId,
-    afterObservations: Array.isArray(finalizedAttempt.observations)
+    afterAttemptArtifactId: finalizedAttempt?.attemptArtifactId,
+    afterObservations: Array.isArray(finalizedAttempt?.observations)
       ? finalizedAttempt.observations
       : [],
-    selfReport: finalizedAttempt.selfReport || {},
+    selfReport: finalizedAttempt?.selfReport || {},
+    motorMap: motorResponseMap || null,
     settledAt: nowMs,
-    afterAttemptOrdinal: finalizedAttempt.ordinal ?? null,
-    attemptSequence: sessionState?.attemptSequence || null,
+    afterAttemptOrdinal: canonicalOrdinal,
+    attemptSequence,
   });
-  return settlement;
 }
 
-/**
- * Build the privacy-bounded witness. NEVER contains: raw observations,
- * audio, transcripts, cue prose, formant tracks, or learner-identifying
- * free text — only bounded identifiers and decision summaries.
- */
-function buildWitness({ mode, controllerTurn, settlement, disposition, phase, nowMs }) {
+function terminalTrialFromSettlement(settlement, fallback) {
+  if (settlement && ['settled', 'invalidated'].includes(settlement.status)
+    && settlement.trial && typeof settlement.trial === 'object') {
+    return settlement.trial;
+  }
+  return fallback || null;
+}
+
+function motorMapFromSettlement(settlement, fallback) {
+  if (settlement && Object.prototype.hasOwnProperty.call(settlement, 'motorMap')) {
+    return settlement.motorMap;
+  }
+  return fallback || null;
+}
+
+function buildWitness({
+  mode,
+  controllerTurn,
+  settlement,
+  disposition,
+  phase,
+  nowMs,
+  attemptSource,
+  evidenceDigest,
+}) {
   return {
     schema: FEM_V1_RUNTIME_SCHEMA,
     mode,
@@ -109,6 +237,7 @@ function buildWitness({ mode, controllerTurn, settlement, disposition, phase, no
       safetyReason: controllerTurn?.safetyReason || null,
       phase,
       focusDimension: controllerTurn?.focus?.dimension || null,
+      cueId: controllerTurn?.cue?.cueId || null,
     },
     settlement: {
       status: settlement?.status || null,
@@ -116,109 +245,156 @@ function buildWitness({ mode, controllerTurn, settlement, disposition, phase, no
       trialId: settlement?.trialId || null,
     },
     finalizedAttempt: {
+      source: attemptSource,
       ordinal: disposition?.ordinal || null,
       eligible: disposition?.eligible === true,
+      replayed: disposition?.replayed === true,
+      evidenceDigest: evidenceDigest || null,
     },
     rejectionReasons: controllerTurn?.eligibility?.rejected
-      ? controllerTurn.eligibility.rejected.slice(0, 8).map((r) => r.reason)
+      ? controllerTurn.eligibility.rejected.slice(0, 8).map((row) => row.reason)
       : [],
   };
 }
 
-/**
- * The shared FEM runtime turn. Pure: no IO, no clock reads (now is injected),
- * no state application. The caller owns persistence and serving.
- */
 function resolveFemV1RuntimeTurn({
   mode = 'shadow',
   learnerState = {},
   sessionState = {},
+  finalizedAttemptEvent = null,
   finalizedAttempt = null,
+  turnEvidence = null,
   cueResolver = () => null,
   now = null,
 } = {}) {
   const resolvedMode = normalizeMode(mode);
   const nowMs = Number.isFinite(now) ? now : null;
 
-  // 1. Consume the finalized attempt into the sequence (ineligible attempts
-  //    carry their deterministic reason — never silently skipped).
-  const disposition = finalizedAttempt
-    ? consumeFinalizedAttempt(sessionState, finalizedAttempt)
-    : null;
-
-  // 2. Safety short-circuit: a pain-carrying attempt settles nothing and
-  //    stops the turn outright (settlement of a hurting take would credit
-  //    a cue from pain — forbidden).
-  const selfReport = finalizedAttempt?.selfReport
-    ? normalizeSelfReport(finalizedAttempt.selfReport)
-    : normalizeSelfReport({});
-
-  // 3. Resolve the pending trial (exact-next) BEFORE the controller runs —
-  //    but only when the attempt was eligible and no pain was reported.
-  let settlement = { status: 'not_applicable', result: 'no_pending_trial', trialId: null };
-  if (finalizedAttempt && !selfReport.pain && !selfReport.throatPain) {
-    settlement = resolvePendingTrial(sessionState, finalizedAttempt, nowMs);
-  } else if (sessionState?.pendingTrial && sessionState.pendingTrial.status === 'pending') {
-    // Review cycle-1 follow-up: pain-skip on a REAL pending trial gets its
-    // own label (not the misleading no_pending_trial default).
-    settlement = { status: 'not_applicable', result: 'pain_skipped_settlement', trialId: String(sessionState.pendingTrial.trialId || '').slice(0, 120) || null };
+  if (finalizedAttemptEvent && finalizedAttempt) {
+    throw new Error('multiple_finalized_attempt_sources');
   }
 
-  // 4. Build the controller inputs from strict contracts.
-  const captureState = finalizedAttempt?.captureEvidence
-    && typeof finalizedAttempt.captureEvidence === 'object'
+  let attemptSource = 'none';
+  let event = null;
+  let resolvedAttempt = null;
+  if (finalizedAttemptEvent) {
+    event = normalizeAttemptFinalizedEvent(finalizedAttemptEvent);
+    if (sessionState?.sessionId && event.sessionId !== sessionState.sessionId) {
+      throw new Error('attempt_event_session_mismatch');
+    }
+    if (event.expectedSessionRevision != null && Number.isInteger(sessionState?.revision)
+      && event.expectedSessionRevision !== sessionState.revision) {
+      throw new Error('attempt_event_revision_mismatch');
+    }
+    resolvedAttempt = attemptFromFinalizedEvent(event);
+    const merged = resolveCanonicalAttemptEvidence(resolvedAttempt, turnEvidence);
+    if (digestJson(merged) !== event.evidenceDigest) {
+      throw new Error('attempt_evidence_conflict:sealed_event');
+    }
+    attemptSource = 'explicit_event';
+  } else if (finalizedAttempt) {
+    const evidence = resolveCanonicalAttemptEvidence(finalizedAttempt, turnEvidence);
+    resolvedAttempt = {
+      ...finalizedAttempt,
+      selfReport: evidence.selfReport,
+      captureEvidence: evidence.captureEvidence,
+      observations: evidence.observations,
+    };
+    attemptSource = 'legacy_attempt';
+  }
+
+  const consumption = resolvedAttempt
+    ? consumeFinalizedAttempt(sessionState, resolvedAttempt)
+    : {
+      disposition: null,
+      attemptSequence: validateAndCloneAttemptSequence(sessionState?.attemptSequence),
+      sequenceChanged: false,
+    };
+  const disposition = consumption.disposition;
+  const workingAttemptSequence = consumption.attemptSequence;
+
+  const turnOnlyEvidence = normalizeEvidenceObject(turnEvidence);
+  const canonicalEvidence = resolvedAttempt
     ? {
-      usable: finalizedAttempt.captureEvidence.usable === true,
-      reasons: Array.isArray(finalizedAttempt.captureEvidence.reasons)
-        ? finalizedAttempt.captureEvidence.reasons.slice(0, 8)
-        : [],
+      selfReport: resolvedAttempt.selfReport || {},
+      captureEvidence: resolvedAttempt.captureEvidence || {},
+      observations: Array.isArray(resolvedAttempt.observations) ? resolvedAttempt.observations : [],
+    }
+    : {
+      selfReport: normalizeEvidenceObject(turnOnlyEvidence.selfReport),
+      captureEvidence: normalizeEvidenceObject(turnOnlyEvidence.captureEvidence),
+      observations: Array.isArray(turnOnlyEvidence.observations) ? turnOnlyEvidence.observations : [],
+    };
+
+  const selfReport = canonicalEvidence.selfReport;
+  const safetyState = buildSafetyState(selfReport);
+  const captureSource = canonicalEvidence.captureEvidence;
+  const captureState = Object.keys(captureSource).length > 0
+    ? {
+      usable: captureSource.usable === true,
+      reasons: Array.isArray(captureSource.reasons) ? captureSource.reasons.slice(0, 8) : [],
     }
     : { usable: true, reasons: [] };
 
-  const safetyState = {
-    pain: selfReport.pain,
-    throatPain: selfReport.throatPain,
-    effort: selfReport.effort,
-    strain: selfReport.strain,
-    fatigue: selfReport.fatigue,
-    discomfort: selfReport.discomfort,
-  };
-  // Review cycle-1 MAJOR fix: forward ALL stop/flag fields — whitelisted over
-  // the controller's own exported lists (same pattern as coaching/index.js)
-  // so adopting this orchestrator can never silently drop voiceLoss,
-  // severeBreathlessness, hoarseness, etc.
-  for (const field of IMMEDIATE_STOP_FIELDS) {
-    safetyState[field] = finalizedAttempt?.selfReport?.[field] === true;
-  }
-  for (const field of REDUCE_DIFFICULTY_FLAG_FIELDS) {
-    safetyState[field] = finalizedAttempt?.selfReport?.[field] === true;
+  let settlement = { status: 'not_applicable', result: 'no_pending_trial', trialId: null };
+  if (resolvedAttempt) {
+    settlement = resolvePendingTrial({
+      sessionState,
+      finalizedAttempt: resolvedAttempt,
+      canonicalOrdinal: disposition?.ordinal ?? null,
+      attemptSequence: workingAttemptSequence,
+      motorResponseMap: learnerState?.motorResponseMap || null,
+      nowMs,
+      attemptReplayed: disposition?.replayed === true,
+    });
+  } else if (sessionState?.pendingTrial?.status === 'pending') {
+    settlement = {
+      status: 'not_applicable',
+      result: 'awaiting_next_attempt',
+      trialId: sessionState.pendingTrial.trialId || null,
+    };
   }
 
-  // 5. The authoritative controller turn.
+  // The controller must see post-settlement working state. Passing the original
+  // pending object here can cause a terminally settled trial to be re-requested.
+  const workingPendingTrial = terminalTrialFromSettlement(settlement, sessionState?.pendingTrial);
+  const workingMotorResponseMap = motorMapFromSettlement(
+    settlement,
+    learnerState?.motorResponseMap || null,
+  );
+
   const controllerTurn = resolveFeminizationV1Turn({
     safetyState,
     captureState,
-    curriculumState: {
-      phase: learnerState?.mastery?.curriculumPhase || 'calibration',
-    },
+    curriculumState: { phase: learnerState?.mastery?.curriculumPhase || 'calibration' },
     masteryState: learnerState?.mastery || null,
     goalProfile: learnerState?.goalProfile || null,
     capabilityProfile: learnerState?.capabilityProfile || null,
-    observations: Array.isArray(finalizedAttempt?.observations)
-      ? finalizedAttempt.observations
-      : [],
-    motorResponseMap: learnerState?.motorResponseMap || null,
+    observations: canonicalEvidence.observations,
+    motorResponseMap: workingMotorResponseMap,
     goalCueOverlay: learnerState?.goalCueOverlay || null,
-    pendingTrial: sessionState?.pendingTrial || null,
+    pendingTrial: workingPendingTrial,
     sessionContext: {
-      sessionId: sessionState?.sessionId || null,
+      sessionId: sessionState?.sessionId || event?.sessionId || null,
       stage: sessionState?.stage || 'phrase',
     },
     mode: resolvedMode,
     cueResolver,
   });
 
-  // 6. Witness + proposed delta.
+  const stateDelta = {
+    ...(consumption.sequenceChanged && workingAttemptSequence
+      ? { attemptSequence: workingAttemptSequence }
+      : {}),
+    ...(disposition?.ordinal != null ? { attemptOrdinal: disposition.ordinal } : {}),
+    ...(['settled', 'invalidated'].includes(settlement?.status) && settlement?.trial
+      ? { pendingTrial: settlement.trial }
+      : {}),
+    ...(settlement?.motorMapUpdated === true
+      ? { motorResponseMap: settlement.motorMap }
+      : {}),
+  };
+
   const witness = buildWitness({
     mode: resolvedMode,
     controllerTurn,
@@ -226,15 +402,10 @@ function resolveFemV1RuntimeTurn({
     disposition,
     phase: controllerTurn?.phase || null,
     nowMs,
+    attemptSource,
+    evidenceDigest: event?.evidenceDigest
+      || (resolvedAttempt ? digestJson(canonicalEvidence) : null),
   });
-
-  const proposedStateDelta = resolvedMode === 'shadow'
-    ? {}
-    : {
-      // Proposals only — the caller applies atomically in active mode.
-      ...(settlement?.status === 'settled' ? { settleTrial: settlement } : {}),
-      ...(disposition?.ordinal != null ? { attemptOrdinal: disposition.ordinal } : {}),
-    };
 
   return {
     schema: FEM_V1_RUNTIME_SCHEMA,
@@ -245,12 +416,18 @@ function resolveFemV1RuntimeTurn({
     controllerTurn,
     finalizedAttemptDisposition: disposition,
     witness,
-    proposedStateDelta,
+    // Shadow state is explicitly non-production state. It allows deterministic
+    // multi-turn replay/sequence tracking without granting causal credit for a
+    // cue that was never actually served.
+    shadowStateDelta: resolvedMode === 'shadow' ? stateDelta : {},
+    proposedStateDelta: resolvedMode === 'active' ? stateDelta : {},
   };
 }
 
 module.exports = {
   FEM_V1_RUNTIME_SCHEMA,
   MODES,
+  consumeFinalizedAttempt,
   resolveFemV1RuntimeTurn,
+  validateAndCloneAttemptSequence,
 };
